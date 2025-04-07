@@ -1,8 +1,6 @@
 package regexp
 
 import (
-	"regexp"
-
 	"github.com/wasilibs/go-re2"
 )
 
@@ -18,18 +16,10 @@ type Matcher interface {
 	Match(b []byte) bool
 }
 
-const patternLengthThreshold = 200 // the threshold is chosen based on the performance of the regex engine
-
 func Compile(pattern string) (Matcher, error) {
-	if len(pattern) >= patternLengthThreshold {
-		return re2.Compile(pattern)
-	}
-	return regexp.Compile(pattern)
+	return re2.Compile(pattern)
 }
 
 func MustCompile(pattern string) Matcher {
-	if len(pattern) >= patternLengthThreshold {
-		return re2.MustCompile(pattern)
-	}
-	return regexp.MustCompile(pattern)
+	return re2.MustCompile(pattern)
 }
