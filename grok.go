@@ -18,10 +18,14 @@
 package grok
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/elastic/go-grok/regexp"
+	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/elastic/go-grok/patterns"
 )
@@ -33,6 +37,7 @@ var (
 	ErrTypeNotProvided = fmt.Errorf("type not specified")
 	ErrUnsupportedName = fmt.Errorf("name contains unsupported character ':'")
 
+	FlatToRoot = "FLAT_TO_ROOT"
 	// grok can be specified in either of these forms:
 	// %{SYNTAX} - e.g {NUMBER}
 	// %{SYNTAX:ID} - e.g {NUMBER:MY_AGE}
@@ -40,13 +45,70 @@ var (
 	// supported types are int, long, double, float and boolean
 	// for go specific implementation int and long results in int
 	// double and float both results in float
-	reusePattern = regexp.MustCompile(`%{(\w+(?::[\w+.]+(?::\w+)?)?)}`)
+	reusePattern    = regexp.MustCompile(`%{((?:\w+|(?:\w+\("(?:[^"]|\\")*"(?:,\s*"[^"]*")?)\))(?::[\w+.]*(?::(?:\w+|\w+\([^)]*\)))?)?)}`)
+	functionPattern = regexp.MustCompile(`(\w+)\(([^)]*)\)`)
+	delimiterRegex  = regexp.MustCompile("[ ,;]")
 )
+
+var replacements = []struct {
+	pattern      string
+	regex        string
+	goTimeFormat string
+}{
+	// Year patterns
+	{"yyyy", `\d{4}`, "2006"}, // Four-digit year (2018)
+	{"YYYY", `\d{4}`, "2006"}, // Four-digit year (2018)
+	{"yy", `\d{2}`, "06"},     // Two-digit year (18)
+
+	// Month patterns
+	{"MMMM", `(?:January|February|March|April|May|June|July|August|September|October|November|December)`, "January"}, // Full month name
+	{"MMM", `(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)`, "Jan"},                                            // Abbreviated month name
+	{"MM", `(?:0[1-9]|1[0-2])`, "01"}, // Two-digit month (01-12)
+	{"M", `(?:[1-9]|1[0-2])`, "1"},    // One-digit month (1-12)
+
+	// Day of month patterns
+	{"dd", `(?:0[1-9]|[12][0-9]|3[01])`, "02"}, // Two-digit day (01-31)
+	{"d", `(?:[1-9]|[12][0-9]|3[01])`, "2"},    // One-digit day (1-31)
+	{"DD", `(?:0[1-9]|[12][0-9]|3[01])`, "02"}, // Two-digit day (01-31)
+
+	// Day of week patterns
+	{"EEE", `(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat)`, "Mon"}, // Three-letter day name
+
+	// Hour patterns (24-hour)
+	{"HH", `(?:[01][0-9]|2[0-3])`, "15"},   // Two-digit hour, 24-hour (00-23)
+	{"H", `(?:[0-9]|1[0-9]|2[0-3])`, "15"}, // One-digit hour, 24-hour (0-23)
+
+	// Hour patterns (12-hour)
+	{"hh", `(?:0[1-9]|1[0-2])`, "03"}, // Two-digit hour, 12-hour (01-12)
+	{"h", `(?:[1-9]|1[0-2])`, "3"},    // One-digit hour, 12-hour (1-12)
+	{"K", `(?:[0-9]|1[01])`, "3"},     // One-digit hour, 12-hour (0-11)
+
+	// Minute patterns
+	{"mm", `[0-5][0-9]`, "04"},         // Two-digit minute (00-59)
+	{"m", `(?:[0-9]|[1-5][0-9])`, "4"}, // One-digit minute (0-59)
+
+	// Second patterns
+	{"ss", `[0-5][0-9]`, "05"},         // Two-digit second (00-59)
+	{"s", `(?:[0-9]|[1-5][0-9])`, "5"}, // One-digit second (0-59)
+
+	// Millisecond pattern
+	{"SSS", `\d{3}`, "000"},         // Milliseconds, 3-digits (000-999)
+	{"SSSSSS", `\d{6}`, "000000"},   // Microseconds, 6-digits
+	{"SSSSSSS", `\d{7}`, "0000000"}, // 7-digit precision
+
+	// Timezone patterns
+	{"Z", `%{ISO8601_TIMEZONE}`, "Z0700"},
+	{"ZZ", `%{ISO8601_TIMEZONE}`, "Z07:00"},
+	{"z", `%{TZ}`, "MST"}, // UTC offset, ±HH:mm format
+
+	// AM/PM patterns - These should be handled last to avoid conflicts
+	{"a", `(?:AM|PM)`, "PM"}, // Uppercase AM/PM
+}
 
 type Grok struct {
 	patternDefinitions    map[string]string
 	re                    regexp.Matcher
-	typeHints             map[string]string
+	typeHints             map[string][]string
 	lookupDefaultPatterns bool
 }
 
@@ -236,7 +298,38 @@ func (grok *Grok) captureBytes(text []byte) (map[string][]byte, error) {
 }
 
 func (grok *Grok) captureTyped(text []byte) (map[string]interface{}, error) {
-	return captureTypeFn(grok.re, string(text), grok.convertMatch)
+	return captureTypeFn(grok.re, string(text), grok.convertMatchAll)
+}
+
+func mergeCaptureMaps[T any, K comparable, V any](source T, target map[K]V) (map[K]V, bool) {
+	// Use reflection to check if source is a map
+	sourceValue := reflect.ValueOf(source)
+	if sourceValue.Kind() != reflect.Map {
+		return target, false // Not a map, return original target
+	}
+
+	// Iterate through source map keys
+	for _, key := range sourceValue.MapKeys() {
+		// Get value for the key
+		value := sourceValue.MapIndex(key)
+
+		// Convert key and value to the target map's types
+		// This requires type assertions, which might panic if incompatible
+		targetKey, ok := key.Interface().(K)
+		if !ok {
+			continue // Skip if key type cannot be converted
+		}
+
+		targetValue, ok := value.Interface().(V)
+		if !ok {
+			continue // Skip if value type cannot be converted
+		}
+
+		// Add to target map
+		target[targetKey] = targetValue
+	}
+
+	return target, true
 }
 
 func captureTypeFn[K any](re regexp.Matcher, text string, conversionFn func(v, key string) (K, error)) (map[string]K, error) {
@@ -267,45 +360,343 @@ func captureTypeFn[K any](re regexp.Matcher, text string, conversionFn func(v, k
 			if err != nil {
 				return nil, err
 			}
-			captures[strings.ReplaceAll(name, dotSep, ".")] = v
+			if name == FlatToRoot {
+				var merged bool
+				captures, merged = mergeCaptureMaps(v, captures)
+				if !merged {
+					return nil, fmt.Errorf("failed to merge capture maps: %w", ErrParseFailure)
+				}
+			} else {
+				captures[strings.ReplaceAll(name, dotSep, ".")] = v
+			}
 		}
 	}
 
 	return captures, nil
 }
 
-func (grok *Grok) convertMatch(match, name string) (interface{}, error) {
+func (grok *Grok) convertMatchAll(match, name string) (interface{}, error) {
 	hint, found := grok.typeHints[name]
-	if !found {
+	if !found || len(hint) == 0 {
 		return match, nil
 	}
+	var matchAfterConvert interface{}
+	var err error
+	for _, h := range hint {
+		matchAfterConvert, err = grok.convertMatch(match, h, name)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return matchAfterConvert, nil
+}
 
+func parseStringToNumber(s string) (interface{}, error) {
+	if intVal, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return intVal, nil
+	}
+
+	if floatVal, err := strconv.ParseFloat(s, 64); err == nil {
+		return floatVal, nil
+	}
+
+	return nil, fmt.Errorf("failed to parse %q", s)
+}
+
+type KeyValueOptions struct {
+	SeparatorStr string
+	//TODO add support
+	CharacterAllowList string
+	//TODO add support
+	QuotingStr string
+	//TODO add support
+	Delimiter string
+}
+
+func defaultKeyValueOptions() KeyValueOptions {
+	return KeyValueOptions{
+		SeparatorStr:       "=",
+		CharacterAllowList: "",
+		QuotingStr:         "",    // Empty means use default quotes detection: <>, "", ''
+		Delimiter:          " ,;", // Space, comma, and semicolon
+	}
+}
+
+func splitArgsByComma(s string) []string {
+	var result []string
+	var current strings.Builder
+	inQuote := false
+	quoteChar := rune(0)
+
+	for _, char := range s {
+		if (char == '"' || char == '\'') && (quoteChar == 0 || quoteChar == char) {
+			inQuote = !inQuote
+			if inQuote {
+				quoteChar = char
+			} else {
+				quoteChar = 0
+			}
+			current.WriteRune(char)
+		} else if char == ',' && !inQuote {
+			result = append(result, current.String())
+			current.Reset()
+		} else {
+			current.WriteRune(char)
+		}
+	}
+
+	// Add the last part
+	result = append(result, current.String())
+
+	return result
+}
+
+func unquoteString(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 2 && ((s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'')) {
+		return s[1 : len(s)-1]
+	}
+	return s
+}
+
+func parseKeyValueArgs(argsStr string) KeyValueOptions {
+	options := defaultKeyValueOptions()
+
+	// If no args provided, use defaults
+	if argsStr == "" {
+		return options
+	}
+
+	// Split the arguments by comma
+	args := splitArgsByComma(argsStr)
+
+	// Apply the arguments based on their position
+	if len(args) >= 1 && args[0] != "" {
+		options.SeparatorStr = unquoteString(args[0])
+	}
+
+	if len(args) >= 2 && args[1] != "" {
+		options.CharacterAllowList = unquoteString(args[1])
+	}
+
+	if len(args) >= 3 && args[2] != "" {
+		options.QuotingStr = unquoteString(args[2])
+	}
+
+	if len(args) >= 4 && args[3] != "" {
+		options.Delimiter = unquoteString(args[3])
+	}
+
+	return options
+}
+
+func parseKeyValuePairs(pairs []string, delimiter string) (map[string]any, error) {
+	parsed := make(map[string]any)
+	var err error
+	for _, p := range pairs {
+		pair := strings.SplitN(p, delimiter, 2)
+		if len(pair) != 2 {
+			err = errors.Join(err, fmt.Errorf("cannot split %q into 2 items, got %d item(s)", p, len(pair)))
+			continue
+		}
+
+		key := strings.TrimSpace(pair[0])
+		value := strings.TrimSpace(pair[1])
+
+		parsed[key] = value
+	}
+	return parsed, err
+}
+
+func splitStringToPairs(input string, options KeyValueOptions) ([]string, error) {
+	var pairs []string
+
+	// Split the input by delimiter
+	segments := delimiterRegex.Split(input, -1)
+	var currentPair strings.Builder
+
+	separatorStrTrimmed := strings.TrimSpace(options.SeparatorStr)
+	for _, segment := range segments {
+		if strings.HasSuffix(currentPair.String(), separatorStrTrimmed) && segment != "" {
+			currentPair.WriteString(" ")
+			currentPair.WriteString(segment)
+		} else if currentPair.Len() > 0 {
+			// Add the previous pair if it's not empty
+			pairs = append(pairs, currentPair.String())
+			currentPair.Reset()
+			currentPair.WriteString(segment)
+		} else {
+			// Start a new pair
+			currentPair.WriteString(segment)
+		}
+	}
+
+	// Add the last pair if it's not empty
+	if currentPair.Len() > 0 {
+		pairs = append(pairs, currentPair.String())
+	}
+
+	return pairs, nil
+}
+
+func timeToEpochMillis(t time.Time) int64 {
+	return t.UnixNano() / int64(time.Millisecond)
+}
+
+func parseDateString(dateStr string, goFormat string, timezone string) (time.Time, error) {
+	// Handle timezone
+	var loc *time.Location
+	var err error
+
+	if timezone == "" || timezone == "Z" || timezone == "UTC" {
+		loc = time.UTC
+	} else if strings.HasPrefix(timezone, "+") || strings.HasPrefix(timezone, "-") {
+		// Parse numeric timezone offset (e.g. "+3")
+		hours, err := strconv.Atoi(timezone)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("invalid timezone offset: %s", timezone)
+		}
+		loc = time.FixedZone("Custom", hours*3600)
+	} else {
+		// Try to load the timezone by name
+		loc, err = time.LoadLocation(timezone)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("unknown timezone: %s", timezone)
+		}
+	}
+
+	// Parse the date using Go's standard time package
+	parsedTime, err := time.ParseInLocation(goFormat, dateStr, loc)
+	if err != nil {
+		return time.Time{}, err
+	}
+	year := parsedTime.Year()
+	month := parsedTime.Month()
+	day := parsedTime.Day()
+	hour := parsedTime.Hour()
+	minute := parsedTime.Minute()
+	second := parsedTime.Second()
+	nanosecond := parsedTime.Nanosecond()
+
+	// Set default values if needed
+	if year == 0 {
+		year = 1970
+	}
+
+	return time.Date(year, month, day, hour, minute, second, nanosecond, loc), nil
+}
+
+func (grok *Grok) convertMatch(match, hint, name string) (interface{}, error) {
 	switch hint {
 	case "string":
 		return match, nil
-
-	case "double":
+	case "double", "float":
 		return strconv.ParseFloat(match, 64)
-	case "float":
-		return strconv.ParseFloat(match, 64)
-
-	case "int":
+	case "int", "long", "integer":
 		return strconv.Atoi(match)
-	case "long":
-		return strconv.Atoi(match)
-
-	case "bool":
+	case "bool", "boolean":
 		return strconv.ParseBool(match)
-	case "boolean":
-		return strconv.ParseBool(match)
+	case "json":
+		var result map[string]interface{}
+		err := json.Unmarshal([]byte(match), &result)
+		return result, err
 	default:
+		matches := functionPattern.FindStringSubmatch(hint)
+		if len(matches) == 3 {
+			functionName := matches[1]
+			functionArgs := matches[2]
+			switch functionName {
+			case "dateformat":
+				args := splitArgsByComma(functionArgs)
+				if len(args) == 2 {
+					t, err := parseDateString(match, unquoteString(args[0]), unquoteString(args[1]))
+					if err != nil {
+						fmt.Printf("Error parsing date: %v\n", err)
+						return match, nil
+					}
+					return timeToEpochMillis(t), nil
+				}
+				t, err := parseDateString(match, unquoteString(args[0]), "")
+				if err != nil {
+					fmt.Printf("Error parsing date: %v\n", err)
+					return match, nil
+				}
+				return timeToEpochMillis(t), nil
+			case "keyvalue":
+				options := parseKeyValueArgs(functionArgs)
+				pairs, err := splitStringToPairs(match, options)
+				if err != nil {
+					return nil, err
+				}
+				parseKeyValuePairsResult, err := parseKeyValuePairs(pairs, strings.TrimSpace(options.SeparatorStr))
+				if err != nil {
+					return nil, err
+				}
+				return parseKeyValuePairsResult, nil
+			case "scale":
+				functionArgsNumber, err := parseStringToNumber(functionArgs)
+				if err != nil {
+					return nil, err
+				}
+				matchNumber, err := parseStringToNumber(match)
+				if err != nil {
+					return nil, err
+				}
+				switch functionArgsNumber := functionArgsNumber.(type) {
+				case int64:
+					switch matchNumber := matchNumber.(type) {
+					case int64:
+						return matchNumber * functionArgsNumber, nil
+					case float64:
+						return matchNumber * float64(functionArgsNumber), nil
+					}
+				case float64:
+					switch matchNumber := matchNumber.(type) {
+					case int64:
+						return float64(matchNumber) * functionArgsNumber, nil
+					case float64:
+						return matchNumber * functionArgsNumber, nil
+					}
+				}
+				return nil, fmt.Errorf("invalid type for %v: %w", name, ErrTypeNotProvided)
+			}
+		}
 		return nil, fmt.Errorf("invalid type for %v: %w", name, ErrTypeNotProvided)
 	}
 }
 
+func splitByColonOutsideParentheses(input string) []string {
+	var result []string
+	var currentPart strings.Builder
+	parenCount := 0
+
+	for _, char := range input {
+		if char == '(' {
+			parenCount++
+			currentPart.WriteRune(char)
+		} else if char == ')' {
+			parenCount--
+			currentPart.WriteRune(char)
+		} else if char == ':' && parenCount == 0 {
+			// Found a colon outside of parentheses
+			result = append(result, currentPart.String())
+			currentPart.Reset()
+		} else {
+			currentPart.WriteRune(char)
+		}
+	}
+
+	// Add the last part
+	if currentPart.Len() > 0 {
+		result = append(result, currentPart.String())
+	}
+
+	return result
+}
+
 // expand processes a pattern and returns expanded regular expression, type hints and error
-func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[string]string, error) {
-	hints := make(map[string]string)
+func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[string][]string, error) {
+	hints := make(map[string][]string)
 	expandedPattern := pattern
 
 	// recursion break is guarding against cyclic reference in pattern definitions
@@ -325,23 +716,43 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 
 			// nameSubmatch is equal to [["%{NAME:ID:TYPe}" "NAME:ID:TYPe"]]
 			// we need only inner part
-			nameParts := strings.Split(nameSubmatch[1], ":")
+			nameParts := splitByColonOutsideParentheses(nameSubmatch[1])
 
 			grokId := nameParts[0]
 			var targetId string
 			if len(nameParts) > 1 {
-				targetId = strings.ReplaceAll(nameParts[1], ".", dotSep)
+				if nameParts[1] == "" {
+					if len(nameParts) == 3 && (strings.HasPrefix(nameParts[2], "json") || strings.HasPrefix(nameParts[2], "keyvalue")) {
+						targetId = FlatToRoot
+					} else {
+						return "", nil, fmt.Errorf("target id is empty: %w", ErrParseFailure)
+					}
+				} else {
+					targetId = strings.ReplaceAll(nameParts[1], ".", dotSep)
+				}
 			} else {
 				targetId = nameParts[0]
 			}
+			if len(nameParts) > 1 {
+				switch nameParts[0] {
+				case "NUMBER":
+					hints[targetId] = append(hints[targetId], "double")
+				case "INT", "INTEGER":
+					hints[targetId] = append(hints[targetId], "int")
+				}
+			}
 			// compile hints for used patterns
 			if len(nameParts) == 3 {
-				hints[targetId] = nameParts[2]
+				hints[targetId] = append(hints[targetId], nameParts[2])
 			}
 
-			knownPattern, found := grok.lookupPattern(grokId)
+			knownPattern, found, lookupHint := grok.lookupPattern(grokId)
 			if !found {
 				return "", nil, fmt.Errorf("pattern definition %q unknown: %w", grokId, ErrParseFailure)
+			}
+
+			if lookupHint != "" {
+				hints[targetId] = append(hints[targetId], lookupHint)
 			}
 
 			var replacementPattern string
@@ -361,17 +772,110 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 	return expandedPattern, hints, nil
 }
 
-func (grok *Grok) lookupPattern(grokId string) (string, bool) {
+func createRegexPatternFromFormat(format string) (string, string) {
+	// Handle quoted text (literals)
+	formattedPattern := strings.Replace(format, "'T'", "T", -1)
+	formattedPattern = strings.Replace(formattedPattern, "'", "", -1)
+
+	// Perform replacements using token-based approach
+	tokens := tokenizeFormat(formattedPattern)
+	regexTokens := make([]string, len(tokens))
+	copy(regexTokens, tokens)
+
+	// Create a copy of the original format for Go format conversion
+	goFormatTokens := make([]string, len(tokens))
+	copy(goFormatTokens, tokens)
+
+	// Apply regex replacements
+	for i, token := range regexTokens {
+		for _, r := range replacements {
+			if token == r.pattern {
+				regexTokens[i] = r.regex
+				break
+			}
+		}
+	}
+
+	// Apply Go format replacements
+	for i, token := range goFormatTokens {
+		for _, r := range replacements {
+			if token == r.pattern {
+				goFormatTokens[i] = r.goTimeFormat
+				break
+			}
+		}
+	}
+
+	return strings.Join(regexTokens, ""), strings.Join(goFormatTokens, "")
+}
+
+// Helper function to tokenize the format string
+func tokenizeFormat(format string) []string {
+	// Define all possible tokens in order of longest first
+	possibleTokens := []string{
+		"YYYY", "yyyy", "MMMM", "SSSSSS", "SSSSSSS", "EEE",
+		"yyy", "MMM", "SSS",
+		"yy", "MM", "DD", "dd", "HH", "hh", "mm", "ss", "ZZ",
+		"y", "M", "d", "K", "H", "h", "m", "s", "Z", "z", "A", "a",
+	}
+
+	var tokens []string
+	remaining := format
+
+	for len(remaining) > 0 {
+		matched := false
+
+		// Try to match a token at the current position
+		for _, token := range possibleTokens {
+			if strings.HasPrefix(remaining, token) {
+				tokens = append(tokens, token)
+				remaining = remaining[len(token):]
+				matched = true
+				break
+			}
+		}
+
+		// If no token matched, add the current character as a literal
+		if !matched {
+			tokens = append(tokens, string(remaining[0]))
+			remaining = remaining[1:]
+		}
+	}
+
+	return tokens
+}
+
+func (grok *Grok) lookupPattern(grokId string) (string, bool, string) {
 	if knownPattern, found := grok.patternDefinitions[grokId]; found {
-		return knownPattern, found
+		return knownPattern, found, ""
 	}
 
 	if grok.lookupDefaultPatterns {
 		if knownPattern, found := patterns.Default[grokId]; found {
-			return knownPattern, found
+			return knownPattern, found, ""
 		}
 	}
 
-	return "", false
+	matches := functionPattern.FindStringSubmatch(grokId)
+	if len(matches) == 3 {
+		functionName := matches[1]
+		functionArgs := matches[2]
+		switch functionName {
+		case "date":
+			args := splitArgsByComma(functionArgs)
+			if len(args) == 0 {
+				return "", false, ""
+			}
+			regexPattern, goFormat := createRegexPatternFromFormat(unquoteString(args[0]))
+			dateHint := fmt.Sprintf(`dateformat("%s")`, goFormat)
+			if len(args) == 2 {
+				dateHint = fmt.Sprintf(`dateformat("%s", "%s")`, goFormat, unquoteString(args[1]))
+			}
+			return regexPattern, true, dateHint
+		case "regex":
+			return unquoteString(functionArgs), true, ""
+		}
+	}
 
+	return "", false, ""
 }

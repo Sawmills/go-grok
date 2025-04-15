@@ -297,7 +297,7 @@ func TestTypedParseWithDefaultPatterns(t *testing.T) {
 			"127.0.0.1:1234",
 			map[string]interface{}{
 				"destination.ip":   "127.0.0.1",
-				"destination.port": "1234",
+				"destination.port": float64(1234),
 				"BASE10NUM":        "1234",
 				"NGINX_HOST":       "127.0.0.1:1234",
 				"IPV4":             "127.0.0.1",
@@ -499,4 +499,626 @@ func TestUnsupportedName(t *testing.T) {
 	invalidPatterns["VALID"] = "*."
 	err = g.AddPatterns(invalidPatterns)
 	require.Equal(t, err, grok.ErrUnsupportedName)
+}
+
+func TestConvertMatch(t *testing.T) {
+	testCases := []struct {
+		Name                 string
+		Pattern              string
+		Text                 string
+		ExpectedTypedMatches map[string]interface{}
+		NamedCapturesOnly    bool
+	}{
+		{
+			"NUMBER pattern with float",
+			`Usage: %{NUMBER:usage}%{GREEDYDATA:ignore}`,
+			"Usage: 24.3%",
+			map[string]interface{}{
+				"usage":  24.3,
+				"ignore": "%",
+			},
+			true,
+		},
+		{
+			"NUMBER pattern with int",
+			`Usage: %{NUMBER:usage}%{GREEDYDATA:ignore}`,
+			"Usage: 24%",
+			map[string]interface{}{
+				"usage":  float64(24),
+				"ignore": "%",
+			},
+			true,
+		},
+		{
+			"INT pattern with float",
+			`Usage: %{INT:usage}%{GREEDYDATA:ignore}`,
+			"Usage: 24.3%",
+			map[string]interface{}{
+				"usage":  24,
+				"ignore": ".3%",
+			},
+			true,
+		},
+		{
+			"INT pattern with int",
+			`Usage: %{INT:usage}%{GREEDYDATA:ignore}`,
+			"Usage: 24%",
+			map[string]interface{}{
+				"usage":  24,
+				"ignore": "%",
+			},
+			true,
+		},
+		{
+			"INT pattern with scale(1000)",
+			`Usage: %{INT:usage:scale(1000)}%{GREEDYDATA:ignore}`,
+			"Usage: 24%",
+			map[string]interface{}{
+				"usage":  int64(24000),
+				"ignore": "%",
+			},
+			true,
+		},
+		{
+			"NUMBER pattern with scale(1000)",
+			`Usage: %{NUMBER:usage:scale(1000)}%{GREEDYDATA:ignore}`,
+			"Usage: 24.3%",
+			map[string]interface{}{
+				"usage":  float64(24300),
+				"ignore": "%",
+			},
+			true,
+		},
+		{
+			`data keyvalue(": ")`,
+			`%{GREEDYDATA:da.test:keyvalue(": ")}`,
+			"user: john connect_date: 11/08/2017 id: 123 action: click",
+			map[string]interface{}{
+				"da.test": map[string]interface{}{
+					"user":         "john",
+					"connect_date": "11/08/2017",
+					"id":           "123",
+					"action":       "click",
+				},
+			},
+			true,
+		},
+		{
+			`data keyvalue("=","/:")`,
+			`%{GREEDYDATA:da.test:keyvalue("=","/:")}`,
+			"url=https://app.datadoghq.com/event/stream user=john",
+			map[string]interface{}{
+				"da.test": map[string]interface{}{
+					"url":  "https://app.datadoghq.com/event/stream",
+					"user": "john",
+				},
+			},
+			true,
+		},
+		{
+			`data keyvalue(": ") with no prefix`,
+			`%{GREEDYDATA::keyvalue(": ")}`,
+			"user: john connect_date: 11/08/2017 id: 123 action: click",
+			map[string]interface{}{
+				"user":         "john",
+				"connect_date": "11/08/2017",
+				"id":           "123",
+				"action":       "click",
+			},
+			true,
+		},
+		{
+			`data keyvalue("= ") with no prefix`,
+			`%{GREEDYDATA::keyvalue("= ")}`,
+			"user= john connect_date= 11/08/2017 id= 123 action= click",
+			map[string]interface{}{
+				"user":         "john",
+				"connect_date": "11/08/2017",
+				"id":           "123",
+				"action":       "click",
+			},
+			true,
+		},
+		{
+			`nested JSON`,
+			`%{WORD:vm} %{WORD:app}\[%{NUMBER:logger.thread_id}\]: %{NOTSPACE:server} %{data::json}`,
+			`vagrant program[123]: server.1 {"method":"GET", "status_code":200, "url":"https://app.datadoghq.com/logs/pipelines", "duration":123456}`,
+			map[string]interface{}{
+				"vm":               "vagrant",
+				"app":              "program",
+				"logger.thread_id": float64(123),
+				"server":           "server.1",
+				"method":           "GET",
+				"status_code":      float64(200),
+				"url":              "https://app.datadoghq.com/logs/pipelines",
+				"duration":         float64(123456),
+			},
+			true,
+		},
+		{
+			`nested JSON with param without name`,
+			`%{WORD:vm} %{WORD:app}\[%{NUMBER}\]: %{NOTSPACE:server} %{data::json}`,
+			`vagrant program[123]: server.1 {"method":"GET", "status_code":200, "url":"https://app.datadoghq.com/logs/pipelines", "duration":123456}`,
+			map[string]interface{}{
+				"vm":          "vagrant",
+				"app":         "program",
+				"server":      "server.1",
+				"method":      "GET",
+				"status_code": float64(200),
+				"url":         "https://app.datadoghq.com/logs/pipelines",
+				"duration":    float64(123456),
+			},
+			true,
+		},
+		{
+			`date fn: HH:mm:ss`,
+			`%{date("HH:mm:ss"):date}`,
+			`14:20:15`,
+			map[string]interface{}{
+				"date": int64(51615000),
+			},
+			true,
+		},
+		{
+			`date fn: hh:mm:ss a`,
+			`%{date("hh:mm:ss a"):date}`,
+			`02:20:15 PM`,
+			map[string]interface{}{
+				"date": int64(51615000),
+			},
+			true,
+		},
+		{
+			`date fn: EEE MMM dd HH:mm:ss yyyy with timezone +3`,
+			`%{date("EEE MMM dd HH:mm:ss yyyy","+3"):date}`,
+			`Thu Jun 16 08:29:03 2016`,
+			map[string]interface{}{
+				"date": int64(1466054943000),
+			},
+			true,
+		},
+		{
+			`date fn: EEE MMM dd HH:mm:ss yyyy with timezone Europe/Paris`,
+			`%{date("EEE MMM dd HH:mm:ss yyyy","Europe/Paris"):date}`,
+			`Thu Jun 16 08:29:03 2016`,
+			map[string]interface{}{
+				"date": int64(1466058543000),
+			},
+			true,
+		},
+		{
+			`date fn: dd/MM/yyyy`,
+			`%{date("dd/MM/yyyy"):date}`,
+			`11/10/2014`,
+			map[string]interface{}{
+				"date": int64(1412985600000),
+			},
+			true,
+		},
+		{
+			`date fn: EEE MMM dd HH:mm:ss yyyy (no timezone)`,
+			`%{date("EEE MMM dd HH:mm:ss yyyy"):date}`,
+			`Thu Jun 16 08:29:03 2016`,
+			map[string]interface{}{
+				"date": int64(1466065743000),
+			},
+			true,
+		},
+		{
+			`date fn: EEE MMM d HH:mm:ss yyyy (single-digit day)`,
+			`%{date("EEE MMM d HH:mm:ss yyyy"):date}`,
+			`Tue Nov 1 08:29:03 2016`,
+			map[string]interface{}{
+				"date": int64(1477988943000),
+			},
+			true,
+		},
+		{
+			`date fn: dd/MMM/yyyy:HH:mm:ss Z`,
+			`%{date("dd/MMM/yyyy:HH:mm:ss Z"):date}`,
+			`06/Mar/2013:01:36:30 +0900`,
+			map[string]interface{}{
+				"date": int64(1362533790000),
+			},
+			true,
+		},
+		{
+			`date fn: yyyy-MM-dd'T'HH:mm:ss.SSSZ`,
+			`%{date("yyyy-MM-dd'T'HH:mm:ss.SSSZ"):date}`,
+			`2016-11-29T16:21:36.431+0000`,
+			map[string]interface{}{
+				"date": int64(1480436496431),
+			},
+			true,
+		},
+		{
+			`date fn: yyyy-MM-dd'T'HH:mm:ss.SSSZZ`,
+			`%{date("yyyy-MM-dd'T'HH:mm:ss.SSSZZ"):date}`,
+			`2016-11-29T16:21:36.431+00:00`,
+			map[string]interface{}{
+				"date": int64(1480436496431),
+			},
+			true,
+		},
+		{
+			`date fn: dd/MMM/yyyy:HH:mm:ss.SSS`,
+			`%{date("dd/MMM/yyyy:HH:mm:ss.SSS"):date}`,
+			`06/Feb/2009:12:14:14.655`,
+			map[string]interface{}{
+				"date": int64(1233922454655),
+			},
+			true,
+		},
+		{
+			`date fn: yyyy-MM-dd HH:mm:ss.SSS z`,
+			`%{date("yyyy-MM-dd HH:mm:ss.SSS z"):date}`,
+			`2007-08-31 19:22:22.427 ADT`,
+			map[string]interface{}{
+				"date": int64(1188588142427),
+			},
+			true,
+		},
+		{
+			`regex fn: [a-z]*`,
+			`%{regex("[a-z]*"):user.firstname}_%{regex("[a-zA-Z0-9]*"):user.id} .*`,
+			`john_1a2b3c4 connected on 11/08/2017`,
+			map[string]interface{}{
+				"user.firstname": "john",
+				"user.id":        "1a2b3c4",
+			},
+			true,
+		},
+		{
+			"MMdd HH:mm:ss.SSSSSS format",
+			`%{date("MMdd HH:mm:ss.SSSSSS"):date}`,
+			"0601 14:20:25.000572",
+			map[string]interface{}{
+				"date": int64(13098025000),
+			},
+			true,
+		},
+		{
+			"yyyy-MM-dd format",
+			`%{date("yyyy-MM-dd"):date}`,
+			"2023-06-15",
+			map[string]interface{}{
+				"date": int64(1686787200000),
+			},
+			true,
+		},
+		{
+			"ISO8601 with timezone",
+			`%{date("yyyy-MM-dd'T'HH:mm:ssZ"):date}`,
+			"2023-06-15T14:20:25+0000",
+			map[string]interface{}{
+				"date": int64(1686838825000),
+			},
+			true,
+		},
+		{
+			"US date format",
+			`%{date("MM/dd/yyyy"):date}`,
+			"06/15/2023",
+			map[string]interface{}{
+				"date": int64(1686787200000),
+			},
+			true,
+		},
+		{
+			"EU date format",
+			`%{date("dd/MM/yyyy"):date}`,
+			"15/06/2023",
+			map[string]interface{}{
+				"date": int64(1686787200000),
+			},
+			true,
+		},
+		{
+			"HTTP date format",
+			`%{date("dd/MMM/yyyy:HH:mm:ss Z"):date}`,
+			"15/Jun/2023:14:20:25 +0000",
+			map[string]interface{}{
+				"date": int64(1686838825000),
+			},
+			true,
+		},
+		{
+			"Syslog timestamp format",
+			`%{date("MMM dd HH:mm:ss"):date}`,
+			"Jun 15 14:20:25",
+			map[string]interface{}{
+				"date": int64(14307625000),
+			},
+			true,
+		},
+		{
+			"MMdd format",
+			`%{date("MMdd"):date}`,
+			"0615",
+			map[string]interface{}{
+				"date": int64(14256000000),
+			},
+			true,
+		},
+		{
+			"ISO8601 without timezone",
+			`%{date("yyyy-MM-dd'T'HH:mm:ss"):date}`,
+			"2023-06-15T14:20:25",
+			map[string]interface{}{
+				"date": int64(1686838825000),
+			},
+			true,
+		},
+		{
+			"Date with time",
+			`%{date("yyyy-MM-dd HH:mm:ss"):date}`,
+			"2023-06-15 14:20:25",
+			map[string]interface{}{
+				"date": int64(1686838825000),
+			},
+			true,
+		},
+		{
+			"Time with milliseconds",
+			`%{date("HH:mm:ss.SSS"):date}`,
+			"14:20:25.123",
+			map[string]interface{}{
+				"date": int64(51625123),
+			},
+			true,
+		},
+		{
+			"Time without milliseconds",
+			`%{date("HH:mm:ss"):date}`,
+			"14:20:25",
+			map[string]interface{}{
+				"date": int64(51625000),
+			},
+			true,
+		},
+		{
+			"TIMESTAMP_ISO8601 - 1",
+			`%{date("yyyy-MM-dd'T'HH:mm:ss.SSS"):date}`,
+			"2019-10-21T15:13:23.419",
+			map[string]interface{}{
+				"date": int64(1571670803419),
+			},
+			true,
+		},
+		{
+			"TIMESTAMP_ISO8601 - 2",
+			`%{date("yyyy-MM-dd HH:mm:ss.SSS-0000"):date}`,
+			"2022-02-10 11:20:01.638-0000",
+			map[string]interface{}{
+				"date": int64(1644492001638),
+			},
+			true,
+		},
+		{
+			"ISO8601 with milliseconds and timezone",
+			`%{date("yyyy-MM-dd'T'HH:mm:ss.SSSZ"):date}`,
+			"2023-06-15T14:20:25.123+0000",
+			map[string]interface{}{
+				"date": int64(1686838825123),
+			},
+			true,
+		},
+		{
+			"ISO8601 with milliseconds and timezone (ZZ)",
+			`%{date("yyyy-MM-dd'T'HH:mm:ss.SSSZZ"):date}`,
+			"2023-06-15T14:20:25.123+00:00",
+			map[string]interface{}{
+				"date": int64(1686838825123),
+			},
+			true,
+		},
+		{
+			"US date with time and milliseconds",
+			`%{date("MM/dd/yyyy, H:mm:ss.SSS"):date}`,
+			"06/15/2023, 1:25:45.141",
+			map[string]interface{}{
+				"date": int64(1686792345141),
+			},
+			true,
+		},
+		{
+			"US date with time, milliseconds and AM/PM",
+			`%{date("MM/dd/yyyy, K:mm:ss.SSS a"):date}`,
+			"06/15/2023, 1:25:45.141 PM",
+			map[string]interface{}{
+				"date": int64(1686835545141),
+			},
+			true,
+		},
+		{
+			"Date with milliseconds and comma separator",
+			`%{date("yyyy-MM-dd HH:mm:ss,SSS"):date}`,
+			"2023-06-15 14:20:25,123",
+			map[string]interface{}{
+				"date": int64(1686838825123),
+			},
+			true,
+		},
+		{
+			"Date with milliseconds and dot separator",
+			`%{date("yyyy-MM-dd HH:mm:ss.SSS"):date}`,
+			"2023-06-15 14:20:25.123",
+			map[string]interface{}{
+				"date": int64(1686838825123),
+			},
+			true,
+		},
+		{
+			"Date with milliseconds and timezone",
+			`%{date("yyyy-MM-dd HH:mm:ss.SSSZ"):date}`,
+			"2023-06-15 14:20:25.123+0000",
+			map[string]interface{}{
+				"date": int64(1686838825123),
+			},
+			true,
+		},
+		{
+			"Date with milliseconds and timezone (ZZ)",
+			`%{date("yyyy-MM-dd HH:mm:ss.SSSZZ"):date}`,
+			"2023-06-15 14:20:25.123+00:00",
+			map[string]interface{}{
+				"date": int64(1686838825123),
+			},
+			true,
+		},
+		{
+			"Date with year first",
+			`%{date("yyyy/MM/dd HH:mm:ss"):date}`,
+			"2024/03/18 14:56:36",
+			map[string]interface{}{
+				"date": int64(1710773796000),
+			},
+			true,
+		},
+		{
+			"Date with month word",
+			`%{date("dd/MMM/YYYY:HH:mm:ss"):date}`,
+			"19/Jun/2023:16:04:12",
+			map[string]interface{}{
+				"date": int64(1687190652000),
+			},
+			true,
+		},
+		{
+			"Date with rabbit 1",
+			`%{date("d-MMM-yyyy::HH:mm:ss"):date}`,
+			"8-Mar-2018::14:09:27",
+			map[string]interface{}{
+				"date": int64(1520518167000),
+			},
+			true,
+		},
+		{
+			"Date with rabbit 2",
+			`%{date("dd-MMM-yyyy::HH:mm:ss"):date}`,
+			"08-Mar-2018::14:09:27",
+			map[string]interface{}{
+				"date": int64(1520518167000),
+			},
+			true,
+		},
+		{
+			"Date with dd agent",
+			`%{date("yyyy-MM-dd HH:mm:ss z"):date}`,
+			"2019-02-01 16:59:41 UTC",
+			map[string]interface{}{
+				"date": int64(1549040381000),
+			},
+			true,
+		},
+		{
+			"Date with elb",
+			`%{date("yyyy-MM-dd'T'HH:mm:ss.SSSSSSZ"):date}`,
+			"2015-05-13T23:39:43.945958Z",
+			map[string]interface{}{
+				"date": int64(1431560383945),
+			},
+			true,
+		},
+		{
+			"Date with redis 1",
+			`%{date("dd MMM HH:mm:ss.SSS"):date}`,
+			"08 Jan 17:45:41.572",
+			map[string]interface{}{
+				"date": int64(668741572),
+			},
+			true,
+		},
+		{
+			"Date with redis 2",
+			`%{date("dd MMM yyyy HH:mm:ss.SSS"):date}`,
+			"14 May 2019 19:11:40.164",
+			map[string]interface{}{
+				"date": int64(1557861100164),
+			},
+			true,
+		},
+		{
+			"Date with python 1",
+			`%{date("yyyy-MM-dd H:mm:ss,SSS"):date}`,
+			"2019-01-07 15:20:15,972",
+			map[string]interface{}{
+				"date": int64(1546874415972),
+			},
+			true,
+		},
+		{
+			"Date with python 2",
+			`%{date("yyyy-MM-dd'T'HH:mm:ss','SSS"):date}`,
+			"2017-12-19T14:37:58,995",
+			map[string]interface{}{
+				"date": int64(1513694278995),
+			},
+			true,
+		},
+		{
+			"Date with etcd",
+			`%{date("yyyy-MM-dd HH:mm:ss.SSSSSS"):date}`,
+			"2020-08-20 18:23:44.721706",
+			map[string]interface{}{
+				"date": int64(1597947824721),
+			},
+			true,
+		},
+		{
+			"Date with elasticsearch",
+			`%{date("yyyy-MM-dd'T'HH:mm:ss,SSS"):date}`,
+			"2023-08-24T06:20:10,847",
+			map[string]interface{}{
+				"date": int64(1692858010847),
+			},
+			true,
+		},
+		{
+			"Date with keda",
+			`%{date("MMDD HH:mm:ss.SSSSSS"):date}`,
+			"1216 14:53:06.680302",
+			map[string]interface{}{
+				"date": int64(30207186680),
+			},
+			true,
+		},
+		{
+			"Date with datadog tracer",
+			`%{date("yyyy-MM-dd HH:mm:ss:SSS Z"):date}`,
+			"2022-01-27 13:51:31:805 +0000",
+			map[string]interface{}{
+				"date": "2022-01-27 13:51:31:805 +0000",
+			},
+			true,
+		},
+		{
+			"Date with rabbitmq",
+			`%{date("yyyy-MM-dd HH:mm:ss.SSSSSSZZ"):date}`,
+			"2022-04-18 22:52:43.608049+00:00",
+			map[string]interface{}{
+				"date": int64(1650322363608),
+			},
+			true,
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.Name, func(t *testing.T) {
+			g := grok.New()
+
+			require.NoError(t, g.Compile(tt.Pattern, tt.NamedCapturesOnly))
+
+			res, err := g.ParseTypedString(tt.Text)
+			require.NoError(t, err)
+
+			require.Equal(t, len(tt.ExpectedTypedMatches), len(res))
+
+			for k, v := range tt.ExpectedTypedMatches {
+				val, found := res[k]
+				require.True(t, found, "Key %q not found", k)
+				require.Equal(t, v, val)
+			}
+		})
+	}
 }

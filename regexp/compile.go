@@ -14,6 +14,7 @@ type Matcher interface {
 	ExpandString(dst []byte, template string, src string, match []int) []byte
 	FindAllStringSubmatch(s string, n int) [][]string
 	Match(b []byte) bool
+	Split(s string, n int) []string
 }
 
 func Compile(pattern string) (Matcher, error) {
