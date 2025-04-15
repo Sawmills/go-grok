@@ -17,16 +17,19 @@
 
 package patterns
 
-var Default map[string]string = map[string]string{
+var intPattern = `(?:[+-]?(?:[0-9]+))`
+
+var Default = map[string]string{
 	"WORD":     `\b\w+\b`,
 	"NOTSPACE": `\S+`,
 	"SPACE":    `\s*`,
 	"DATA":     `.*?`,
 
 	// types
-	"INT":    `(?:[+-]?(?:[0-9]+))`,
-	"NUMBER": `(?:%{BASE10NUM})`,
-	"BOOL":   "true|false",
+	"INT":     intPattern,
+	"INTEGER": intPattern,
+	"NUMBER":  `(?:%{BASE10NUM})`,
+	"BOOL":    "true|false",
 
 	"BASE10NUM":    `([+-]?(?:[0-9]+(?:\.[0-9]+)?)|\.[0-9]+)`,
 	"BASE16NUM":    `[+-]?(?:0x)?[0-9A-Fa-f]+`,                    // Adjusted, removed lookbehind
@@ -34,6 +37,7 @@ var Default map[string]string = map[string]string{
 	"POSINT":       `\b[1-9][0-9]*\b`,
 	"NONNEGINT":    `\b[0-9]+\b`,
 	"GREEDYDATA":   `.*`,
+	"data":         `.*`,
 	"QUOTEDSTRING": `"([^"\\]*(\\.[^"\\]*)*)"|\'([^\'\\]*(\\.[^\'\\]*)*)\'`,
 	"UUID":         `[A-Fa-f0-9]{8}-(?:[A-Fa-f0-9]{4}-){3}[A-Fa-f0-9]{12}`,
 	"URN":          `urn:[0-9A-Za-z][0-9A-Za-z-]{0,31}:[0-9A-Za-z()+,.:=@;$_!*'/?#-]+`,
