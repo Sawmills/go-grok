@@ -802,10 +802,10 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 				targetId = grokId
 			}
 			if len(nameParts) > 1 {
-				switch grokId {
-				case "NUMBER":
+				switch {
+				case grokId == "NUMBER" && nameParts[0] != "numberStr":
 					hints[targetId] = append(hints[targetId], "double")
-				case "INT", "INTEGER":
+				case (grokId == "INT" || grokId == "INTEGER") && nameParts[0] != "integerStr":
 					hints[targetId] = append(hints[targetId], "int")
 				}
 			}
