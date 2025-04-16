@@ -621,7 +621,7 @@ func TestConvertMatch(t *testing.T) {
 		},
 		{
 			`nested JSON`,
-			`%{WORD:vm} %{WORD:app}\[%{NUMBER:logger.thread_id}\]: %{NOTSPACE:server} %{data::json}`,
+			`%{WORD:vm} %{WORD:app}\[%{number:logger.thread_id}\]: %{NOTSPACE:server} %{data::json}`,
 			`vagrant program[123]: server.1 {"method":"GET", "status_code":200, "url":"https://app.datadoghq.com/logs/pipelines", "duration":123456}`,
 			map[string]interface{}{
 				"vm":               "vagrant",
@@ -637,7 +637,7 @@ func TestConvertMatch(t *testing.T) {
 		},
 		{
 			`nested JSON with param without name`,
-			`%{WORD:vm} %{WORD:app}\[%{NUMBER}\]: %{NOTSPACE:server} %{data::json}`,
+			`%{word:vm} %{WORD:app}\[%{NUMBER}\]: %{NOTSPACE:server} %{data::json}`,
 			`vagrant program[123]: server.1 {"method":"GET", "status_code":200, "url":"https://app.datadoghq.com/logs/pipelines", "duration":123456}`,
 			map[string]interface{}{
 				"vm":          "vagrant",
@@ -1098,6 +1098,58 @@ func TestConvertMatch(t *testing.T) {
 			"2022-04-18 22:52:43.608049+00:00",
 			map[string]interface{}{
 				"date": int64(1650322363608),
+			},
+			true,
+		},
+		{
+			"nullIf simple empty return",
+			`%{notSpace:http.ident:nullIf("-")}`,
+			`-`,
+			map[string]interface{}{},
+			true,
+		},
+		{
+			"nullIf simple with return",
+			`%{notSpace:http.ident:nullIf("-")}`,
+			`400`,
+			map[string]interface{}{
+				"http.ident": "400",
+			},
+			true,
+		},
+		{
+			"nullIf complecated pattern",
+			`%{ipOrHost:network.client.ip} %{notSpace:http.ident:nullIf("-")} %{notSpace:http.auth:nullIf("-")} \[%{date("dd/MMM/yyyy:HH:mm:ss Z"):date_access}\] "(?:%{word:http.method} |)%{notSpace:http.url}(?: HTTP\/%{regex("\\d+\\.\\d+"):http.version}|)" %{number:http.status_code} (?:%{number:network.bytes_written}|-) "%{notSpace:http.referer}" "%{regex("[^\\\"]*"):http.useragent}".*`,
+			`::1 - - [21/Oct/2019:19:16:34 +0000] "GET / HTTP/1.1" 504 - "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/77.0.3865.90 Safari/537.36"`,
+			map[string]interface{}{
+				"http.referer":      "-",
+				"http.status_code":  float64(504),
+				"http.method":       "GET",
+				"http.useragent":    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/77.0.3865.90 Safari/537.36",
+				"http.version":      "1.1",
+				"http.url":          "/",
+				"network.client.ip": "::1",
+				"date_access":       int64(1571685394000),
+			},
+			true,
+		},
+		{
+			"regex or 1",
+			`(%{integer:user.id}|%{word:user.firstname}) connected on %{date("MM/dd/yyyy"):connect_date}`,
+			`john connected on 11/08/2017`,
+			map[string]interface{}{
+				"user.firstname": "john",
+				"connect_date":   int64(1510099200000),
+			},
+			true,
+		},
+		{
+			"regex or 2",
+			`(%{integer:user.id}|%{word:user.firstname}) connected on %{date("MM/dd/yyyy"):connect_date}`,
+			`12345 connected on 11/08/2017`,
+			map[string]interface{}{
+				"user.id":      12345,
+				"connect_date": int64(1510099200000),
 			},
 			true,
 		},

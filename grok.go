@@ -50,7 +50,40 @@ var (
 	delimiterRegex  = regexp.MustCompile("[ ,;]")
 )
 
-var replacements = []struct {
+var patternDefaultsMappings = map[string]string{
+	// Direct 1:1 mappings where the matcher name matches the pattern name
+	"notSpace":     "NOTSPACE",
+	"word":         "WORD",
+	"quotedString": "QUOTEDSTRING",
+	"uuid":         "UUID",
+	"mac":          "MAC",
+	"ipv4":         "IPV4",
+	"ipv6":         "IPV6",
+	"ip":           "IP",
+	"hostname":     "HOSTNAME",
+	"ipOrHost":     "IPORHOST",
+
+	// Numeric types
+	"number":        "NUMBER",
+	"numberStr":     "NUMBER",
+	"numberExt":     "BASE10NUM",
+	"numberExtStr":  "BASE10NUM",
+	"integer":       "INT",
+	"integerStr":    "INT",
+	"integerExt":    "INT",
+	"integerExtStr": "INT",
+
+	// String types
+	"doubleQuotedString": "QUOTEDSTRING", // Subset of QUOTEDSTRING
+	"singleQuotedString": "QUOTEDSTRING", // Subset of QUOTEDSTRING
+
+	// Special cases
+	"boolean": "BOOL",
+	"port":    "POSINT",
+	"data":    "GREEDYDATA",
+}
+
+var dateReplacements = []struct {
 	pattern      string
 	regex        string
 	goTimeFormat string
@@ -332,6 +365,28 @@ func mergeCaptureMaps[T any, K comparable, V any](source T, target map[K]V) (map
 	return target, true
 }
 
+func safeIsNil(i interface{}) bool {
+	if i == nil {
+		return true
+	}
+
+	v := reflect.ValueOf(i)
+
+	// Check if the value is valid first
+	if !v.IsValid() {
+		return true
+	}
+
+	// Check based on the kind of value
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Ptr, reflect.UnsafePointer, reflect.Interface, reflect.Slice:
+		return v.IsNil()
+	default:
+		// For types that can't be nil (int, string, struct, etc.)
+		return false
+	}
+}
+
 func captureTypeFn[K any](re regexp.Matcher, text string, conversionFn func(v, key string) (K, error)) (map[string]K, error) {
 	captures := make(map[string]K)
 
@@ -359,6 +414,9 @@ func captureTypeFn[K any](re regexp.Matcher, text string, conversionFn func(v, k
 			v, err := conversionFn(string(match), name)
 			if err != nil {
 				return nil, err
+			}
+			if safeIsNil(v) {
+				continue
 			}
 			if name == FlatToRoot {
 				var merged bool
@@ -606,6 +664,12 @@ func (grok *Grok) convertMatch(match, hint, name string) (interface{}, error) {
 			functionName := matches[1]
 			functionArgs := matches[2]
 			switch functionName {
+			case "nullIf":
+				args := splitArgsByComma(functionArgs)
+				if match == unquoteString(args[0]) {
+					return nil, nil
+				}
+				return match, nil
 			case "dateformat":
 				args := splitArgsByComma(functionArgs)
 				if len(args) == 2 {
@@ -719,6 +783,10 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 			nameParts := splitByColonOutsideParentheses(nameSubmatch[1])
 
 			grokId := nameParts[0]
+			// replace grokId with default pattern if it exists
+			if _, ok := patternDefaultsMappings[grokId]; ok {
+				grokId = patternDefaultsMappings[grokId]
+			}
 			var targetId string
 			if len(nameParts) > 1 {
 				if nameParts[1] == "" {
@@ -731,10 +799,10 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 					targetId = strings.ReplaceAll(nameParts[1], ".", dotSep)
 				}
 			} else {
-				targetId = nameParts[0]
+				targetId = grokId
 			}
 			if len(nameParts) > 1 {
-				switch nameParts[0] {
+				switch grokId {
 				case "NUMBER":
 					hints[targetId] = append(hints[targetId], "double")
 				case "INT", "INTEGER":
@@ -788,7 +856,7 @@ func createRegexPatternFromFormat(format string) (string, string) {
 
 	// Apply regex replacements
 	for i, token := range regexTokens {
-		for _, r := range replacements {
+		for _, r := range dateReplacements {
 			if token == r.pattern {
 				regexTokens[i] = r.regex
 				break
@@ -798,7 +866,7 @@ func createRegexPatternFromFormat(format string) (string, string) {
 
 	// Apply Go format replacements
 	for i, token := range goFormatTokens {
-		for _, r := range replacements {
+		for _, r := range dateReplacements {
 			if token == r.pattern {
 				goFormatTokens[i] = r.goTimeFormat
 				break
@@ -873,7 +941,7 @@ func (grok *Grok) lookupPattern(grokId string) (string, bool, string) {
 			}
 			return regexPattern, true, dateHint
 		case "regex":
-			return unquoteString(functionArgs), true, ""
+			return strings.ReplaceAll(unquoteString(functionArgs), `\\`, `\`), true, ""
 		}
 	}
 
