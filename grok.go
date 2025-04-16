@@ -648,7 +648,7 @@ func (grok *Grok) convertMatch(match, hint, name string) (interface{}, error) {
 	switch hint {
 	case "string":
 		return match, nil
-	case "double", "float":
+	case "double", "float", "number":
 		return strconv.ParseFloat(match, 64)
 	case "int", "long", "integer":
 		return strconv.Atoi(match)

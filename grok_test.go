@@ -1153,6 +1153,15 @@ func TestConvertMatch(t *testing.T) {
 			},
 			true,
 		},
+		{
+			"Pattern with number modifier",
+			`%{port:network.client.port:number}`,
+			`8080`,
+			map[string]interface{}{
+				"network.client.port": float64(8080),
+			},
+			true,
+		},
 	}
 
 	for _, tt := range testCases {
