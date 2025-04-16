@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/elastic/go-grok/parsers"
 	"github.com/elastic/go-grok/regexp"
 	"net/url"
 	"reflect"
@@ -144,12 +145,14 @@ type Grok struct {
 	re                    regexp.Matcher
 	typeHints             map[string][]string
 	lookupDefaultPatterns bool
+	rubyHashParser        parsers.RubyHashParser
 }
 
 func New() *Grok {
 	return &Grok{
 		patternDefinitions:    make(map[string]string),
 		lookupDefaultPatterns: true,
+		rubyHashParser:        parsers.RubyHashParser{},
 	}
 }
 
@@ -755,6 +758,8 @@ func (grok *Grok) convertMatch(match, hint, name string) (interface{}, error) {
 			}
 		}
 		return result, nil
+	case "rubyhash":
+		return grok.rubyHashParser.Parse(match)
 	default:
 		parseResult := parseFunction(hint)
 		if parseResult != nil {
