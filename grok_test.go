@@ -1162,6 +1162,24 @@ func TestConvertMatch(t *testing.T) {
 			},
 			true,
 		},
+		{
+			"Pattern with numberStr",
+			`%{numberStr:network.client.port}`,
+			`8080`,
+			map[string]interface{}{
+				"network.client.port": "8080",
+			},
+			true,
+		},
+		{
+			"Pattern with integerStr",
+			`%{integerStr:network.client.port}`,
+			`8080`,
+			map[string]interface{}{
+				"network.client.port": "8080",
+			},
+			true,
+		},
 	}
 
 	for _, tt := range testCases {
