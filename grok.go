@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/elastic/go-grok/regexp"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -517,16 +518,13 @@ func unquoteString(s string) string {
 	return s
 }
 
-func parseKeyValueArgs(argsStr string) KeyValueOptions {
+func parseKeyValueArgs(args []string) KeyValueOptions {
 	options := defaultKeyValueOptions()
 
 	// If no args provided, use defaults
-	if argsStr == "" {
+	if len(args) == 0 {
 		return options
 	}
-
-	// Split the arguments by comma
-	args := splitArgsByComma(argsStr)
 
 	// Apply the arguments based on their position
 	if len(args) >= 1 && args[0] != "" {
@@ -644,6 +642,92 @@ func parseDateString(dateStr string, goFormat string, timezone string) (time.Tim
 	return time.Date(year, month, day, hour, minute, second, nanosecond, loc), nil
 }
 
+type ParseFunction struct {
+	Name string
+	Args []string
+}
+
+func parseFunction(funcStr string) *ParseFunction {
+	// Find the function name (everything before the first open parenthesis)
+	nameEndIndex := strings.Index(funcStr, "(")
+	if nameEndIndex == -1 {
+		return nil // No opening parenthesis found
+	}
+
+	name := strings.TrimSpace(funcStr[:nameEndIndex])
+
+	// Now extract everything between the outermost parentheses
+	remainingStr := funcStr[nameEndIndex:]
+
+	// Track parentheses and quotes
+	parenCount := 0
+	inQuotes := false
+	argsStart := -1
+	argsEnd := -1
+
+	for i := 0; i < len(remainingStr); i++ {
+		char := rune(remainingStr[i])
+
+		// Handle escape sequences
+		if char == '\\' && i+1 < len(remainingStr) {
+			// Skip the backslash and the escaped character
+			i++
+			continue
+		}
+
+		if char == '"' {
+			// Toggle quote state only for non-escaped quotes
+			// (We already handled escape sequences above)
+			inQuotes = !inQuotes
+		} else if char == '(' && !inQuotes {
+			parenCount++
+			if parenCount == 1 {
+				argsStart = i + 1 // Start of arguments (after opening parenthesis)
+			}
+		} else if char == ')' && !inQuotes {
+			parenCount--
+			if parenCount == 0 {
+				argsEnd = i // End of arguments (before closing parenthesis)
+				break
+			}
+		}
+	}
+
+	if argsStart == -1 || argsEnd == -1 || argsStart > argsEnd {
+		return nil // Invalid function format
+	}
+
+	args := remainingStr[argsStart:argsEnd]
+
+	return &ParseFunction{
+		Name: name,
+		Args: splitArgsByComma(args),
+	}
+}
+
+func extractBetweenTags(input, startTag, endTag string) string {
+	// Find the start position
+	startPos := strings.Index(input, startTag)
+	if startPos == -1 {
+		return "" // Start tag not found
+	}
+
+	// Adjust startPos to be after the start tag
+	startPos += len(startTag)
+
+	// Find the end position, starting from after the start tag
+	endPos := strings.Index(input[startPos:], endTag)
+	if endPos == -1 {
+		return "" // End tag not found
+	}
+
+	// The end position is relative to startPos, so adjust it
+	endPos += startPos
+
+	// Extract the content between the tags
+	return input[startPos:endPos]
+}
+
 func (grok *Grok) convertMatch(match, hint, name string) (interface{}, error) {
 	switch hint {
 	case "string":
@@ -658,20 +742,44 @@ func (grok *Grok) convertMatch(match, hint, name string) (interface{}, error) {
 		var result map[string]interface{}
 		err := json.Unmarshal([]byte(match), &result)
 		return result, err
+	case "querystring":
+		queryStr := strings.TrimPrefix(match, "?")
+		values, err := url.ParseQuery(queryStr)
+		if err != nil {
+			return nil, err
+		}
+		result := make(map[string]string)
+		for key, val := range values {
+			if len(val) > 0 {
+				result[key] = val[0]
+			}
+		}
+		return result, nil
 	default:
-		matches := functionPattern.FindStringSubmatch(hint)
-		if len(matches) == 3 {
-			functionName := matches[1]
-			functionArgs := matches[2]
+		parseResult := parseFunction(hint)
+		if parseResult != nil {
+			functionName := parseResult.Name
+			args := parseResult.Args
 			switch functionName {
+			case "array":
+				if len(args) == 1 {
+					return strings.Split(match, unquoteString(args[0])), nil
+				}
+				if len(args) == 2 {
+					openCloseStr := unquoteString(args[0])
+					openCloseStrParts := strings.Split(openCloseStr, "")
+					startTag := openCloseStrParts[0]
+					endTag := openCloseStrParts[1]
+					content := extractBetweenTags(match, startTag, endTag)
+					return strings.Split(content, unquoteString(args[1])), nil
+				}
+				return nil, fmt.Errorf("invalid arguments 'array' func: %s", strings.Join(args, " "))
 			case "nullIf":
-				args := splitArgsByComma(functionArgs)
 				if match == unquoteString(args[0]) {
 					return nil, nil
 				}
 				return match, nil
 			case "dateformat":
-				args := splitArgsByComma(functionArgs)
 				if len(args) == 2 {
 					t, err := parseDateString(match, unquoteString(args[0]), unquoteString(args[1]))
 					if err != nil {
@@ -687,7 +795,7 @@ func (grok *Grok) convertMatch(match, hint, name string) (interface{}, error) {
 				}
 				return timeToEpochMillis(t), nil
 			case "keyvalue":
-				options := parseKeyValueArgs(functionArgs)
+				options := parseKeyValueArgs(args)
 				pairs, err := splitStringToPairs(match, options)
 				if err != nil {
 					return nil, err
@@ -698,7 +806,7 @@ func (grok *Grok) convertMatch(match, hint, name string) (interface{}, error) {
 				}
 				return parseKeyValuePairsResult, nil
 			case "scale":
-				functionArgsNumber, err := parseStringToNumber(functionArgs)
+				functionArgsNumber, err := parseStringToNumber(args[0])
 				if err != nil {
 					return nil, err
 				}
@@ -733,16 +841,36 @@ func splitByColonOutsideParentheses(input string) []string {
 	var result []string
 	var currentPart strings.Builder
 	parenCount := 0
+	inQuotes := false
 
-	for _, char := range input {
-		if char == '(' {
+	for i := 0; i < len(input); i++ {
+		char := rune(input[i])
+
+		// Handle escape sequences
+		if char == '\\' && i+1 < len(input) {
+			nextChar := rune(input[i+1])
+			// If escaping a quote or another backslash, add both characters
+			if nextChar == '"' || nextChar == '\\' {
+				currentPart.WriteRune(char)
+				currentPart.WriteRune(nextChar)
+				i++ // Skip the next character as we've already handled it
+				continue
+			}
+		}
+
+		if char == '(' && !inQuotes {
 			parenCount++
 			currentPart.WriteRune(char)
-		} else if char == ')' {
+		} else if char == ')' && !inQuotes {
 			parenCount--
 			currentPart.WriteRune(char)
-		} else if char == ':' && parenCount == 0 {
-			// Found a colon outside of parentheses
+		} else if char == '"' {
+			// Only toggle quotes if it's not an escaped quote
+			// (We already handled escaped quotes in the escape sequence check)
+			inQuotes = !inQuotes
+			currentPart.WriteRune(char)
+		} else if char == ':' && parenCount == 0 && !inQuotes {
+			// Found a colon outside of parentheses and quotes
 			result = append(result, currentPart.String())
 			currentPart.Reset()
 		} else {
@@ -924,13 +1052,12 @@ func (grok *Grok) lookupPattern(grokId string) (string, bool, string) {
 		}
 	}
 
-	matches := functionPattern.FindStringSubmatch(grokId)
-	if len(matches) == 3 {
-		functionName := matches[1]
-		functionArgs := matches[2]
+	parseResult := parseFunction(grokId)
+	if parseResult != nil {
+		functionName := parseResult.Name
+		args := parseResult.Args
 		switch functionName {
 		case "date":
-			args := splitArgsByComma(functionArgs)
 			if len(args) == 0 {
 				return "", false, ""
 			}
@@ -941,7 +1068,7 @@ func (grok *Grok) lookupPattern(grokId string) (string, bool, string) {
 			}
 			return regexPattern, true, dateHint
 		case "regex":
-			return strings.ReplaceAll(unquoteString(functionArgs), `\\`, `\`), true, ""
+			return strings.ReplaceAll(unquoteString(args[0]), `\\`, `\`), true, ""
 		}
 	}
 

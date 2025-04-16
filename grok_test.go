@@ -1180,6 +1180,45 @@ func TestConvertMatch(t *testing.T) {
 			},
 			true,
 		},
+		{
+			"Pattern with )",
+			"systemOS=%{regex(\"[^,)]+\"):OS}",
+			`systemOS=Linux 6.1.128`,
+			map[string]interface{}{
+				"OS": "Linux 6.1.128",
+			},
+			true,
+		},
+		{
+			`:array("[]",",")`,
+			`Users %{data:users:array("[]",",")} have been added to the database`,
+			`Users [John, Oliver, Marc, Tom] have been added to the database`,
+			map[string]interface{}{
+				"users": []string{"John", " Oliver", " Marc", " Tom"},
+			},
+			true,
+		},
+		{
+			`:array(",")`,
+			`Users %{data:users:array(",")} have been added to the database`,
+			`Users John, Oliver, Marc, Tom have been added to the database`,
+			map[string]interface{}{
+				"users": []string{"John", " Oliver", " Marc", " Tom"},
+			},
+			true,
+		},
+		{
+			`cast querystring`,
+			`%{notSpace:http.url_details.queryString:querystring}`,
+			`?productId=superproduct&promotionCode=superpromo`,
+			map[string]interface{}{
+				"http.url_details.queryString": map[string]string{
+					"productId":     "superproduct",
+					"promotionCode": "superpromo",
+				},
+			},
+			true,
+		},
 	}
 
 	for _, tt := range testCases {
