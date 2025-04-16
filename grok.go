@@ -923,7 +923,7 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 			var targetId string
 			if len(nameParts) > 1 {
 				if nameParts[1] == "" {
-					if len(nameParts) == 3 && (strings.HasPrefix(nameParts[2], "json") || strings.HasPrefix(nameParts[2], "keyvalue")) {
+					if len(nameParts) == 3 && (strings.HasPrefix(nameParts[2], "json") || strings.HasPrefix(nameParts[2], "keyvalue") || strings.HasPrefix(nameParts[2], "rubyhash")) {
 						targetId = FlatToRoot
 					} else {
 						return "", nil, fmt.Errorf("target id is empty: %w", ErrParseFailure)

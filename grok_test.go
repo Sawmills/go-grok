@@ -1235,6 +1235,20 @@ func TestConvertMatch(t *testing.T) {
 			},
 			true,
 		},
+		{
+			`cast rubyhash flat`,
+			`%{data::rubyhash}`,
+			`{:status=>500, :request_method=>"GET", :path_info=>"/_node/stats", :query_string=>"", :http_version=>"HTTP/1.1", :http_accept=>"*/*"}`,
+			map[string]interface{}{
+				"http_accept":    "*/*",
+				"http_version":   "HTTP/1.1",
+				"path_info":      "/_node/stats",
+				"query_string":   "",
+				"request_method": "GET",
+				"status":         int64(500),
+			},
+			true,
+		},
 	}
 
 	for _, tt := range testCases {
