@@ -19,7 +19,6 @@ package grok
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/elastic/go-grok/parsers"
 	"github.com/elastic/go-grok/regexp"
@@ -551,11 +550,9 @@ func parseKeyValueArgs(args []string) KeyValueOptions {
 
 func parseKeyValuePairs(pairs []string, delimiter string) (map[string]any, error) {
 	parsed := make(map[string]any)
-	var err error
 	for _, p := range pairs {
 		pair := strings.SplitN(p, delimiter, 2)
 		if len(pair) != 2 {
-			err = errors.Join(err, fmt.Errorf("cannot split %q into 2 items, got %d item(s)", p, len(pair)))
 			continue
 		}
 
@@ -564,7 +561,7 @@ func parseKeyValuePairs(pairs []string, delimiter string) (map[string]any, error
 
 		parsed[key] = value
 	}
-	return parsed, err
+	return parsed, nil
 }
 
 func splitStringToPairs(input string, options KeyValueOptions) ([]string, error) {
