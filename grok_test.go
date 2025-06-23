@@ -1085,10 +1085,10 @@ func TestConvertMatch(t *testing.T) {
 		},
 		{
 			"Date with datadog tracer",
-			`%{date("yyyy-MM-dd HH:mm:ss:SSS Z"):date}`,
-			"2022-01-27 13:51:31:805 +0000",
+			`%{date("yyyy-MM-dd HH:mm:ss.SSS Z"):date}`,
+			"2022-01-27 13:51:31.805 +0000",
 			map[string]interface{}{
-				"date": "2022-01-27 13:51:31:805 +0000",
+				"date": int64(1643291491805),
 			},
 			true,
 		},

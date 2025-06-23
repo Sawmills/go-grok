@@ -441,13 +441,9 @@ func (grok *Grok) convertMatchAll(match, name string) (interface{}, error) {
 	if !found || len(hint) == 0 {
 		return match, nil
 	}
-	var matchAfterConvert interface{}
-	var err error
+	var matchAfterConvert interface{} = match
 	for _, h := range hint {
-		matchAfterConvert, err = grok.convertMatch(match, h, name)
-		if err != nil {
-			return nil, err
-		}
+		matchAfterConvert = grok.convertMatch(matchAfterConvert, h, name)
 	}
 	return matchAfterConvert, nil
 }
@@ -728,25 +724,38 @@ func extractBetweenTags(input, startTag, endTag string) string {
 	return input[startPos:endPos]
 }
 
-func (grok *Grok) convertMatch(match, hint, name string) (interface{}, error) {
+func (grok *Grok) convertMatch(match interface{}, hint, name string) interface{} {
 	switch hint {
 	case "string":
-		return match, nil
+		str := fmt.Sprintf("%v", match)
+		return str
 	case "double", "float", "number":
-		return strconv.ParseFloat(match, 64)
+		result, err := strconv.ParseFloat(fmt.Sprintf("%v", match), 64)
+		if err != nil {
+			return nil
+		}
+		return result
 	case "int", "long", "integer":
-		return strconv.Atoi(match)
+		result, err := strconv.Atoi(fmt.Sprintf("%v", match))
+		if err != nil {
+			return nil
+		}
+		return result
 	case "bool", "boolean":
-		return strconv.ParseBool(match)
+		result, err := strconv.ParseBool(fmt.Sprintf("%v", match))
+		if err != nil {
+			return nil
+		}
+		return result
 	case "json":
 		var result map[string]interface{}
-		err := json.Unmarshal([]byte(match), &result)
-		return result, err
+		_ = json.Unmarshal([]byte(fmt.Sprintf("%v", match)), &result)
+		return result
 	case "querystring":
-		queryStr := strings.TrimPrefix(match, "?")
+		queryStr := strings.TrimPrefix(fmt.Sprintf("%v", match), "?")
 		values, err := url.ParseQuery(queryStr)
 		if err != nil {
-			return nil, err
+			return nil
 		}
 		result := make(map[string]string)
 		for key, val := range values {
@@ -754,9 +763,13 @@ func (grok *Grok) convertMatch(match, hint, name string) (interface{}, error) {
 				result[key] = val[0]
 			}
 		}
-		return result, nil
+		return result
 	case "rubyhash":
-		return grok.rubyHashParser.Parse(match)
+		result, err := grok.rubyHashParser.Parse(fmt.Sprintf("%v", match))
+		if err != nil {
+			return nil
+		}
+		return result
 	default:
 		parseResult := parseFunction(hint)
 		if parseResult != nil {
@@ -764,78 +777,84 @@ func (grok *Grok) convertMatch(match, hint, name string) (interface{}, error) {
 			args := parseResult.Args
 			switch functionName {
 			case "array":
-				if len(args) == 1 {
-					return strings.Split(match, unquoteString(args[0])), nil
+				if str, ok := match.(string); !ok {
+					return nil
+				} else {
+					if len(args) == 1 {
+						return strings.Split(str, unquoteString(args[0]))
+					}
+					if len(args) == 2 {
+						openCloseStr := unquoteString(args[0])
+						openCloseStrParts := strings.Split(openCloseStr, "")
+						startTag := openCloseStrParts[0]
+						endTag := openCloseStrParts[1]
+						content := extractBetweenTags(str, startTag, endTag)
+						return strings.Split(content, unquoteString(args[1]))
+					}
+					return nil
 				}
-				if len(args) == 2 {
-					openCloseStr := unquoteString(args[0])
-					openCloseStrParts := strings.Split(openCloseStr, "")
-					startTag := openCloseStrParts[0]
-					endTag := openCloseStrParts[1]
-					content := extractBetweenTags(match, startTag, endTag)
-					return strings.Split(content, unquoteString(args[1])), nil
-				}
-				return nil, fmt.Errorf("invalid arguments 'array' func: %s", strings.Join(args, " "))
 			case "nullIf":
 				if match == unquoteString(args[0]) {
-					return nil, nil
+					return nil
 				}
-				return match, nil
+				return match
 			case "dateformat":
-				if len(args) == 2 {
-					t, err := parseDateString(match, unquoteString(args[0]), unquoteString(args[1]))
-					if err != nil {
-						fmt.Printf("Error parsing date: %v\n", err)
-						return match, nil
+				if str, ok := match.(string); !ok {
+					return nil
+				} else {
+					if len(args) == 2 {
+						t, err := parseDateString(str, unquoteString(args[0]), unquoteString(args[1]))
+						if err != nil {
+							return nil
+						}
+						return timeToEpochMillis(t)
 					}
-					return timeToEpochMillis(t), nil
+					t, err := parseDateString(str, unquoteString(args[0]), "")
+					if err != nil {
+						return nil
+					}
+					return timeToEpochMillis(t)
 				}
-				t, err := parseDateString(match, unquoteString(args[0]), "")
-				if err != nil {
-					fmt.Printf("Error parsing date: %v\n", err)
-					return match, nil
-				}
-				return timeToEpochMillis(t), nil
 			case "keyvalue":
 				options := parseKeyValueArgs(args)
-				pairs, err := splitStringToPairs(match, options)
+				pairs, err := splitStringToPairs(fmt.Sprintf("%v", match), options)
 				if err != nil {
-					return nil, err
+					return nil
 				}
 				parseKeyValuePairsResult, err := parseKeyValuePairs(pairs, strings.TrimSpace(options.SeparatorStr))
 				if err != nil {
-					return nil, err
+					return nil
 				}
-				return parseKeyValuePairsResult, nil
+				return parseKeyValuePairsResult
 			case "scale":
 				functionArgsNumber, err := parseStringToNumber(args[0])
 				if err != nil {
-					return nil, err
+					return nil
 				}
-				matchNumber, err := parseStringToNumber(match)
+				matchNumber, err := parseStringToNumber(fmt.Sprintf("%v", match))
 				if err != nil {
-					return nil, err
+					return nil
 				}
 				switch functionArgsNumber := functionArgsNumber.(type) {
 				case int64:
 					switch matchNumber := matchNumber.(type) {
 					case int64:
-						return matchNumber * functionArgsNumber, nil
+						return matchNumber * functionArgsNumber
 					case float64:
-						return matchNumber * float64(functionArgsNumber), nil
+						return matchNumber * float64(functionArgsNumber)
 					}
 				case float64:
 					switch matchNumber := matchNumber.(type) {
 					case int64:
-						return float64(matchNumber) * functionArgsNumber, nil
+						return float64(matchNumber) * functionArgsNumber
 					case float64:
-						return matchNumber * functionArgsNumber, nil
+						return matchNumber * functionArgsNumber
 					}
 				}
-				return nil, fmt.Errorf("invalid type for %v: %w", name, ErrTypeNotProvided)
+				return nil
 			}
 		}
-		return nil, fmt.Errorf("invalid type for %v: %w", name, ErrTypeNotProvided)
+		return nil
 	}
 }
 
