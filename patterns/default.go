@@ -37,7 +37,6 @@ var Default = map[string]string{
 	"POSINT":       `\b[1-9][0-9]*\b`,
 	"NONNEGINT":    `\b[0-9]+\b`,
 	"GREEDYDATA":   `.*`,
-	"data":         `.*`,
 	"QUOTEDSTRING": `"([^"\\]*(\\.[^"\\]*)*)"|\'([^\'\\]*(\\.[^\'\\]*)*)\'`,
 	"UUID":         `[A-Fa-f0-9]{8}-(?:[A-Fa-f0-9]{4}-){3}[A-Fa-f0-9]{12}`,
 	"URN":          `urn:[0-9A-Za-z][0-9A-Za-z-]{0,31}:[0-9A-Za-z()+,.:=@;$_!*'/?#-]+`,
