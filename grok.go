@@ -81,7 +81,7 @@ var patternDefaultsMappings = map[string]string{
 	// Special cases
 	"boolean": "BOOL",
 	"port":    "POSINT",
-	"data":    "GREEDYDATA",
+	"data":    "DATA",
 }
 
 var dateReplacements = []struct {
@@ -921,7 +921,7 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 			break
 		}
 
-		for _, nameSubmatch := range subMatches {
+		for i, nameSubmatch := range subMatches {
 			// grok can be specified in either of these forms:
 			// %{SYNTAX} - e.g {NUMBER}
 			// %{SYNTAX:ID} - e.g {NUMBER:MY_AGE}
@@ -961,6 +961,11 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 			// compile hints for used patterns
 			if len(nameParts) == 3 {
 				hints[targetId] = append(hints[targetId], nameParts[2])
+			}
+
+			// if the last match is the data pattern, use the greedy data pattern
+			if i == len(subMatches)-1 && nameParts[0] == "data" {
+				grokId = "GREEDYDATA"
 			}
 
 			knownPattern, found, lookupHint := grok.lookupPattern(grokId)

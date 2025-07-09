@@ -651,6 +651,23 @@ func TestConvertMatch(t *testing.T) {
 			true,
 		},
 		{
+			`non greedy data`,
+			`%{date("yyyy-MM-dd HH:mm:ss z"):timestamp} \| %{notSpace:agent} \| %{word:level} \| \(%{notSpace:filename}:%{number:lineno} in %{word:process}\) \|( %{data::keyvalue(":")} \|)?( - \|)?( \(%{notSpace:pyFilename}:%{number:pyLineno}\) \|)?%{data}`,
+			`2025-07-06 12:52:48 UTC | CORE | DEBUG | (pkg/collector/python/datadog_agent.go:150 in LogMessage) | network:4b0649b7e11f0772 | (check_linux.py:422) | Ethtool stat collection not configured`,
+			map[string]interface{}{
+				"timestamp":  int64(1751806368000),
+				"agent":      "CORE",
+				"level":      "DEBUG",
+				"filename":   "pkg/collector/python/datadog_agent.go",
+				"lineno":     float64(150),
+				"process":    "LogMessage",
+				"network":    "4b0649b7e11f0772",
+				"pyFilename": "check_linux.py",
+				"pyLineno":   float64(422),
+			},
+			true,
+		},
+		{
 			`date fn: HH:mm:ss`,
 			`%{date("HH:mm:ss"):date}`,
 			`14:20:15`,
