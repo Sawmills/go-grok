@@ -157,6 +157,10 @@ type captureField struct {
 
 type matchConverter func(grok *Grok, match interface{}) interface{}
 
+type submatchIndexMatcher interface {
+	FindStringSubmatchIndex(string) []int
+}
+
 func New() *Grok {
 	return &Grok{
 		patternDefinitions:    make(map[string]string),
@@ -311,13 +315,13 @@ func (grok *Grok) captureString(text string) (map[string]string, error) {
 	fields := grok.captureFields
 	captures := make(map[string]string, len(fields))
 
-	matches := grok.re.FindStringSubmatchIndex(text)
-	if len(matches) == 0 || len(fields) == 0 {
+	matchField, matched := captureMatcher(grok.re, text)
+	if !matched || len(fields) == 0 {
 		return captures, nil
 	}
 
 	for _, field := range fields {
-		match, ok := captureFieldMatch(text, matches, field)
+		match, ok := matchField(field)
 		if !ok {
 			continue
 		}
@@ -342,13 +346,13 @@ func (grok *Grok) captureBytes(text []byte) (map[string][]byte, error) {
 	captures := make(map[string][]byte, len(fields))
 
 	textString := string(text)
-	matches := grok.re.FindStringSubmatchIndex(textString)
-	if len(matches) == 0 || len(fields) == 0 {
+	matchField, matched := captureMatcher(grok.re, textString)
+	if !matched || len(fields) == 0 {
 		return captures, nil
 	}
 
 	for _, field := range fields {
-		match, ok := captureFieldMatch(textString, matches, field)
+		match, ok := matchField(field)
 		if !ok {
 			continue
 		}
@@ -377,13 +381,13 @@ func (grok *Grok) captureTypedString(text string) (map[string]interface{}, error
 	fields := grok.captureFields
 	captures := make(map[string]interface{}, len(fields))
 
-	matches := grok.re.FindStringSubmatchIndex(text)
-	if len(matches) == 0 || len(fields) == 0 {
+	matchField, matched := captureMatcher(grok.re, text)
+	if !matched || len(fields) == 0 {
 		return captures, nil
 	}
 
 	for _, field := range fields {
-		match, ok := captureFieldMatch(text, matches, field)
+		match, ok := matchField(field)
 		if !ok {
 			continue
 		}
@@ -526,6 +530,37 @@ func captureFieldMatch(text string, matches []int, field captureField) (string, 
 		return "", false
 	}
 	return text[start:end], true
+}
+
+func captureFieldSubmatch(matches []string, field captureField) (string, bool) {
+	if field.index >= len(matches) {
+		return "", false
+	}
+	match := matches[field.index]
+	if match == "" {
+		return "", false
+	}
+	return match, true
+}
+
+func captureMatcher(matcher regexp.Matcher, text string) (func(captureField) (string, bool), bool) {
+	if indexMatcher, ok := matcher.(submatchIndexMatcher); ok {
+		matches := indexMatcher.FindStringSubmatchIndex(text)
+		if len(matches) == 0 {
+			return nil, false
+		}
+		return func(field captureField) (string, bool) {
+			return captureFieldMatch(text, matches, field)
+		}, true
+	}
+
+	matches := matcher.FindStringSubmatch(text)
+	if len(matches) == 0 {
+		return nil, false
+	}
+	return func(field captureField) (string, bool) {
+		return captureFieldSubmatch(matches, field)
+	}, true
 }
 
 func (grok *Grok) convertMatchConverters(match string, converters []matchConverter) interface{} {
