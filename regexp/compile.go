@@ -10,6 +10,7 @@ type Matcher interface {
 	ReplaceAllString(s string, replacement string) string
 	SubexpNames() []string
 	FindStringSubmatch(s string) []string
+	FindStringSubmatchIndex(s string) []int
 	FindAllStringSubmatchIndex(s string, n int) [][]int
 	ExpandString(dst []byte, template string, src string, match []int) []byte
 	FindAllStringSubmatch(s string, n int) [][]string

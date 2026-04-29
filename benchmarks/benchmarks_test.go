@@ -152,6 +152,42 @@ func BenchmarkTypedParseString(b *testing.B) {
 	}
 }
 
+func BenchmarkTypedParseActualString(b *testing.B) {
+	g := grok.New()
+	g.AddPatterns(map[string]string{
+		"NGINX_HOST":         `(?:%{IP:destination__ip}|%{NGINX_NOTSEPARATOR:destination__domain})(:%{NUMBER:destination__port:int})?`,
+		"NGINX_NOTSEPARATOR": `"[^\t ,:]+"`,
+	})
+	input := `127.0.0.1:1234 grok123 - grok123@elastic.co`
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	err := g.Compile("%{NGINX_HOST} %{USERNAME} - %{EMAILADDRESS}", true)
+	require.NoError(b, err)
+
+	for n := 0; n < b.N; n++ {
+		m, e := g.ParseTypedString(input)
+		require.True(b, len(m) > 0)
+		require.NoError(b, e)
+	}
+}
+
+func BenchmarkTypedParseScaleString(b *testing.B) {
+	g := grok.New()
+	input := `duration=24.3 status=ok`
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	err := g.Compile(`duration=%{NUMBER:duration:scale(1000000)} status=%{WORD:status}`, true)
+	require.NoError(b, err)
+
+	for n := 0; n < b.N; n++ {
+		m, e := g.ParseTypedString(input)
+		require.True(b, len(m) > 0)
+		require.NoError(b, e)
+	}
+}
+
 func BenchmarkTypedParseStringTrivago(b *testing.B) {
 	g, err := tgrok.New(tgrok.Config{
 		NamedCapturesOnly: true,
