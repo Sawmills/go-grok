@@ -150,7 +150,6 @@ type Grok struct {
 
 type captureField struct {
 	index      int
-	name       string
 	key        string
 	flatToRoot bool
 	converters []matchConverter
@@ -508,7 +507,6 @@ func captureFields(names []string, hints map[string][]string) ([]captureField, b
 		}
 		fields = append(fields, captureField{
 			index:      i,
-			name:       name,
 			key:        strings.ReplaceAll(name, dotSep, "."),
 			flatToRoot: name == FlatToRoot,
 			converters: compileMatchConverters(hints[name]),
