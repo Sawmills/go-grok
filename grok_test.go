@@ -344,6 +344,39 @@ func TestTypedParseWithDefaultPatterns(t *testing.T) {
 	}
 }
 
+func TestDatadogJavaFallbackParsesTimestampFromRawBody(t *testing.T) {
+	g, err := grok.NewComplete()
+	require.NoError(t, err)
+
+	err = g.AddPatterns(map[string]string{
+		"SR_0": `%{date("yyyy-MM-dd HH:mm:ss"):timestamp}`,
+		"SR_1": `%{date("yyyy-MM-dd HH:mm:ss,SSS"):timestamp}`,
+		"SR_5": `%{word:level}`,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, g.Compile(`^(?:(%{SR_0}|%{SR_1}) %{SR_5}\s+(?:%{word:dd.trace_id} %{word:dd.span_id} )?%{data:message}((\n|\t)%{data:error.stack})?)$`, true))
+
+	got, err := g.ParseTypedString(`2026-05-08 23:01:19,060 INFO org.springframework.amqp.rabbit.RabbitListenerEndpointContainer#2-8 [com.bigid.catalogprocessor.history.service.impl.HistoryObjectsServiceImpl] - [traceId: 643c4d72-1a4c-4a20-9349-7530443aea2b] [spanId: 6cb265c6-e231-4394-8a56-380bbadbc8d0] [parentSpanId: 74aa55b4-60e3-4225-9f73-8d6bcfa16ac6] [tenantId: SINGLE_TENANT] - saved 3 history documents on objectDiff events`)
+	require.NoError(t, err)
+	require.Equal(t, int64(1778281279060), got["timestamp"], "captures: %#v", got)
+	require.Equal(t, "INFO", got["level"])
+}
+
+func TestDatadogANSIUSDatePatternParsesLeadingZeroHour(t *testing.T) {
+	g, err := grok.NewComplete()
+	require.NoError(t, err)
+
+	require.NoError(t, g.Compile("^\\[%{date(\"MM/dd/yyyy, H:mm:ss.SSS\"):date}.*\\] \\[\x1b\\[[0-9]+m %{word:level}  \x1b\\[[0-9]+m\\] \\[%{notSpace:worker_id}\\].*\\[tenantId: %{notSpace:tenant_id}].*$", true))
+
+	got, err := g.ParseTypedString("[05/10/2026, 03:39:43.370 AM] [\x1b[32m INFO  \x1b[39m] [bigid-aci] [\x1b[38;5;3mContainerRemediationService\x1b[39m] [tenantId: RHkwy2F3MFe3TOm] [traceId: b03381e4-30db-4601-bfca-a2df52014aeb] [spanId: 0f584998-8201-4a93-afb4-2155ae567e5c] [parentSpanId: 0] \x1b[32mDefault Container Remediation actions are done\x1b[39m")
+	require.NoError(t, err)
+	require.Equal(t, int64(1778384383370), got["date"], "captures: %#v", got)
+	require.Equal(t, "INFO", got["level"])
+	require.Equal(t, "bigid-aci", got["worker_id"])
+	require.Equal(t, "RHkwy2F3MFe3TOm", got["tenant_id"])
+}
+
 func TestDefaultPatterns(t *testing.T) {
 	testCases := map[string][]string{
 		"WORD":     {"hello", "world123", "test_data"},
@@ -922,9 +955,27 @@ func TestConvertMatch(t *testing.T) {
 			true,
 		},
 		{
+			"US date with time and milliseconds accepts leading-zero H",
+			`%{date("MM/dd/yyyy, H:mm:ss.SSS"):date}`,
+			"06/15/2023, 01:25:45.141",
+			map[string]interface{}{
+				"date": int64(1686792345141),
+			},
+			true,
+		},
+		{
 			"US date with time, milliseconds and AM/PM",
 			`%{date("MM/dd/yyyy, K:mm:ss.SSS a"):date}`,
 			"06/15/2023, 1:25:45.141 PM",
+			map[string]interface{}{
+				"date": int64(1686835545141),
+			},
+			true,
+		},
+		{
+			"US date with time, milliseconds and AM/PM accepts leading-zero K",
+			`%{date("MM/dd/yyyy, K:mm:ss.SSS a"):date}`,
+			"06/15/2023, 01:25:45.141 PM",
 			map[string]interface{}{
 				"date": int64(1686835545141),
 			},

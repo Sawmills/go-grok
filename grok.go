@@ -98,32 +98,32 @@ var dateReplacements = []struct {
 	{"MMMM", `(?:January|February|March|April|May|June|July|August|September|October|November|December)`, "January"}, // Full month name
 	{"MMM", `(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)`, "Jan"},                                            // Abbreviated month name
 	{"MM", `(?:0[1-9]|1[0-2])`, "01"}, // Two-digit month (01-12)
-	{"M", `(?:[1-9]|1[0-2])`, "1"},    // One-digit month (1-12)
+	{"M", `(?:0?[1-9]|1[0-2])`, "1"},  // One-digit month (1-12), accepts optional leading zero
 
 	// Day of month patterns
 	{"dd", `(?:0[1-9]|[12][0-9]|3[01])`, "02"}, // Two-digit day (01-31)
-	{"d", `(?:[1-9]|[12][0-9]|3[01])`, "2"},    // One-digit day (1-31)
+	{"d", `(?:0?[1-9]|[12][0-9]|3[01])`, "2"},  // One-digit day (1-31), accepts optional leading zero
 	{"DD", `(?:0[1-9]|[12][0-9]|3[01])`, "02"}, // Two-digit day (01-31)
 
 	// Day of week patterns
 	{"EEE", `(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat)`, "Mon"}, // Three-letter day name
 
 	// Hour patterns (24-hour)
-	{"HH", `(?:[01][0-9]|2[0-3])`, "15"},   // Two-digit hour, 24-hour (00-23)
-	{"H", `(?:[0-9]|1[0-9]|2[0-3])`, "15"}, // One-digit hour, 24-hour (0-23)
+	{"HH", `(?:[01][0-9]|2[0-3])`, "15"},     // Two-digit hour, 24-hour (00-23)
+	{"H", `(?:0?[0-9]|1[0-9]|2[0-3])`, "15"}, // One-digit hour, 24-hour (0-23), accepts optional leading zero
 
 	// Hour patterns (12-hour)
 	{"hh", `(?:0[1-9]|1[0-2])`, "03"}, // Two-digit hour, 12-hour (01-12)
-	{"h", `(?:[1-9]|1[0-2])`, "3"},    // One-digit hour, 12-hour (1-12)
-	{"K", `(?:[0-9]|1[01])`, "3"},     // One-digit hour, 12-hour (0-11)
+	{"h", `(?:0?[1-9]|1[0-2])`, "3"},  // One-digit hour, 12-hour (1-12), accepts optional leading zero
+	{"K", `(?:0?[0-9]|1[01])`, "3"},   // One-digit hour, 12-hour (0-11), accepts optional leading zero
 
 	// Minute patterns
-	{"mm", `[0-5][0-9]`, "04"},         // Two-digit minute (00-59)
-	{"m", `(?:[0-9]|[1-5][0-9])`, "4"}, // One-digit minute (0-59)
+	{"mm", `[0-5][0-9]`, "04"},           // Two-digit minute (00-59)
+	{"m", `(?:0?[0-9]|[1-5][0-9])`, "4"}, // One-digit minute (0-59), accepts optional leading zero
 
 	// Second patterns
-	{"ss", `[0-5][0-9]`, "05"},         // Two-digit second (00-59)
-	{"s", `(?:[0-9]|[1-5][0-9])`, "5"}, // One-digit second (0-59)
+	{"ss", `[0-5][0-9]`, "05"},           // Two-digit second (00-59)
+	{"s", `(?:0?[0-9]|[1-5][0-9])`, "5"}, // One-digit second (0-59), accepts optional leading zero
 
 	// Millisecond pattern
 	{"SSS", `\d{3}`, "000"},         // Milliseconds, 3-digits (000-999)
@@ -295,7 +295,7 @@ func (grok *Grok) ParseTypedString(text string) (map[string]interface{}, error) 
 
 func (grok *Grok) compile(pattern string, namedCapturesOnly bool) error {
 	// get expanded pattern
-	expandedExpression, hints, err := grok.expand(pattern, namedCapturesOnly)
+	expandedExpression, hints, captureAliases, err := grok.expand(pattern, namedCapturesOnly)
 	if err != nil {
 		return err
 	}
@@ -306,7 +306,7 @@ func (grok *Grok) compile(pattern string, namedCapturesOnly bool) error {
 	}
 
 	grok.re = compiledExpression
-	grok.captureFields, grok.hasCaptureGroups = captureFields(compiledExpression.SubexpNames(), hints)
+	grok.captureFields, grok.hasCaptureGroups = captureFields(compiledExpression.SubexpNames(), hints, captureAliases)
 
 	return nil
 }
@@ -503,16 +503,20 @@ func safeIsNil(i interface{}) bool {
 	}
 }
 
-func captureFields(names []string, hints map[string][]string) ([]captureField, bool) {
+func captureFields(names []string, hints map[string][]string, aliases map[string]string) ([]captureField, bool) {
 	fields := make([]captureField, 0, len(names))
 	for i, name := range names {
 		if len(name) == 0 {
 			continue
 		}
+		key := name
+		if canonical, ok := aliases[name]; ok {
+			key = canonical
+		}
 		fields = append(fields, captureField{
 			index:      i,
-			key:        strings.ReplaceAll(name, dotSep, "."),
-			flatToRoot: name == FlatToRoot,
+			key:        strings.ReplaceAll(key, dotSep, "."),
+			flatToRoot: key == FlatToRoot,
 			converters: compileMatchConverters(hints[name]),
 		})
 	}
@@ -1127,9 +1131,12 @@ func splitByColonOutsideParentheses(input string) []string {
 	return result
 }
 
-// expand processes a pattern and returns expanded regular expression, type hints and error
-func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[string][]string, error) {
+// expand processes a pattern and returns expanded regular expression, type hints,
+// capture aliases and error.
+func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[string][]string, map[string]string, error) {
 	hints := make(map[string][]string)
+	captureAliases := make(map[string]string)
+	captureCounts := make(map[string]int)
 	expandedPattern := pattern
 
 	// recursion break is guarding against cyclic reference in pattern definitions
@@ -1162,7 +1169,7 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 					if len(nameParts) == 3 && (strings.HasPrefix(nameParts[2], "json") || strings.HasPrefix(nameParts[2], "keyvalue") || strings.HasPrefix(nameParts[2], "rubyhash")) {
 						targetId = FlatToRoot
 					} else {
-						return "", nil, fmt.Errorf("target id is empty: %w", ErrParseFailure)
+						return "", nil, nil, fmt.Errorf("target id is empty: %w", ErrParseFailure)
 					}
 				} else {
 					targetId = strings.ReplaceAll(nameParts[1], ".", dotSep)
@@ -1170,26 +1177,23 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 			} else {
 				targetId = grokId
 			}
+			var captureHints []string
 			if len(nameParts) > 1 {
 				switch {
 				case grokId == "NUMBER" && nameParts[0] != "numberStr":
-					hints[targetId] = append(hints[targetId], "double")
+					captureHints = append(captureHints, "double")
 				case (grokId == "INT" || grokId == "INTEGER") && nameParts[0] != "integerStr":
-					hints[targetId] = append(hints[targetId], "int")
+					captureHints = append(captureHints, "int")
 				}
 			}
 			// compile hints for used patterns
 			if len(nameParts) == 3 {
-				hints[targetId] = append(hints[targetId], nameParts[2])
+				captureHints = append(captureHints, nameParts[2])
 			}
 
 			knownPattern, found, lookupHint := grok.lookupPattern(grokId)
 			if !found {
-				return "", nil, fmt.Errorf("pattern definition %q unknown: %w", grokId, ErrParseFailure)
-			}
-
-			if lookupHint != "" {
-				hints[targetId] = append(hints[targetId], lookupHint)
+				return "", nil, nil, fmt.Errorf("pattern definition %q unknown: %w", grokId, ErrParseFailure)
 			}
 
 			var replacementPattern string
@@ -1198,15 +1202,29 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 				replacementPattern = "(" + knownPattern + ")"
 
 			} else {
-				replacementPattern = "(?P<" + targetId + ">" + knownPattern + ")"
+				captureId := targetId
+				if count := captureCounts[targetId]; count > 0 {
+					captureId = fmt.Sprintf("%s___dup%d", targetId, count)
+					captureAliases[captureId] = targetId
+				}
+				captureCounts[targetId]++
+
+				if lookupHint != "" {
+					captureHints = append(captureHints, lookupHint)
+				}
+				if len(captureHints) > 0 {
+					hints[captureId] = append(hints[captureId], captureHints...)
+				}
+
+				replacementPattern = "(?P<" + captureId + ">" + knownPattern + ")"
 			}
 
 			// expand pattern with definition
-			expandedPattern = strings.ReplaceAll(expandedPattern, nameSubmatch[0], replacementPattern)
+			expandedPattern = strings.Replace(expandedPattern, nameSubmatch[0], replacementPattern, 1)
 		}
 	}
 
-	return expandedPattern, hints, nil
+	return expandedPattern, hints, captureAliases, nil
 }
 
 func createRegexPatternFromFormat(format string) (string, string) {
