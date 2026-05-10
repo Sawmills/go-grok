@@ -98,32 +98,32 @@ var dateReplacements = []struct {
 	{"MMMM", `(?:January|February|March|April|May|June|July|August|September|October|November|December)`, "January"}, // Full month name
 	{"MMM", `(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)`, "Jan"},                                            // Abbreviated month name
 	{"MM", `(?:0[1-9]|1[0-2])`, "01"}, // Two-digit month (01-12)
-	{"M", `(?:[1-9]|1[0-2])`, "1"},    // One-digit month (1-12)
+	{"M", `(?:0?[1-9]|1[0-2])`, "1"},  // One-digit month (1-12), accepts optional leading zero
 
 	// Day of month patterns
 	{"dd", `(?:0[1-9]|[12][0-9]|3[01])`, "02"}, // Two-digit day (01-31)
-	{"d", `(?:[1-9]|[12][0-9]|3[01])`, "2"},    // One-digit day (1-31)
+	{"d", `(?:0?[1-9]|[12][0-9]|3[01])`, "2"},  // One-digit day (1-31), accepts optional leading zero
 	{"DD", `(?:0[1-9]|[12][0-9]|3[01])`, "02"}, // Two-digit day (01-31)
 
 	// Day of week patterns
 	{"EEE", `(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat)`, "Mon"}, // Three-letter day name
 
 	// Hour patterns (24-hour)
-	{"HH", `(?:[01][0-9]|2[0-3])`, "15"},   // Two-digit hour, 24-hour (00-23)
-	{"H", `(?:[0-9]|1[0-9]|2[0-3])`, "15"}, // One-digit hour, 24-hour (0-23)
+	{"HH", `(?:[01][0-9]|2[0-3])`, "15"},     // Two-digit hour, 24-hour (00-23)
+	{"H", `(?:0?[0-9]|1[0-9]|2[0-3])`, "15"}, // One-digit hour, 24-hour (0-23), accepts optional leading zero
 
 	// Hour patterns (12-hour)
 	{"hh", `(?:0[1-9]|1[0-2])`, "03"}, // Two-digit hour, 12-hour (01-12)
-	{"h", `(?:[1-9]|1[0-2])`, "3"},    // One-digit hour, 12-hour (1-12)
-	{"K", `(?:[0-9]|1[01])`, "3"},     // One-digit hour, 12-hour (0-11)
+	{"h", `(?:0?[1-9]|1[0-2])`, "3"},  // One-digit hour, 12-hour (1-12), accepts optional leading zero
+	{"K", `(?:0?[0-9]|1[01])`, "3"},   // One-digit hour, 12-hour (0-11), accepts optional leading zero
 
 	// Minute patterns
-	{"mm", `[0-5][0-9]`, "04"},         // Two-digit minute (00-59)
-	{"m", `(?:[0-9]|[1-5][0-9])`, "4"}, // One-digit minute (0-59)
+	{"mm", `[0-5][0-9]`, "04"},           // Two-digit minute (00-59)
+	{"m", `(?:0?[0-9]|[1-5][0-9])`, "4"}, // One-digit minute (0-59), accepts optional leading zero
 
 	// Second patterns
-	{"ss", `[0-5][0-9]`, "05"},         // Two-digit second (00-59)
-	{"s", `(?:[0-9]|[1-5][0-9])`, "5"}, // One-digit second (0-59)
+	{"ss", `[0-5][0-9]`, "05"},           // Two-digit second (00-59)
+	{"s", `(?:0?[0-9]|[1-5][0-9])`, "5"}, // One-digit second (0-59), accepts optional leading zero
 
 	// Millisecond pattern
 	{"SSS", `\d{3}`, "000"},         // Milliseconds, 3-digits (000-999)
@@ -142,9 +142,23 @@ var dateReplacements = []struct {
 type Grok struct {
 	patternDefinitions    map[string]string
 	re                    regexp.Matcher
-	typeHints             map[string][]string
+	captureFields         []captureField
+	hasCaptureGroups      bool
 	lookupDefaultPatterns bool
 	rubyHashParser        parsers.RubyHashParser
+}
+
+type captureField struct {
+	index      int
+	key        string
+	flatToRoot bool
+	converters []matchConverter
+}
+
+type matchConverter func(grok *Grok, match interface{}) interface{}
+
+type submatchIndexMatcher interface {
+	FindStringSubmatchIndex(string) []int
 }
 
 func New() *Grok {
@@ -234,17 +248,7 @@ func (grok *Grok) AddPatterns(patternDefinitions map[string]string) error {
 }
 
 func (grok *Grok) HasCaptureGroups() bool {
-	if grok == nil || grok.re == nil {
-		return false
-	}
-
-	for _, groupName := range grok.re.SubexpNames() {
-		if groupName != "" {
-			return true
-		}
-	}
-
-	return false
+	return grok != nil && grok.hasCaptureGroups
 }
 
 func (grok *Grok) Compile(pattern string, namedCapturesOnly bool) error {
@@ -278,17 +282,7 @@ func (grok *Grok) Parse(text []byte) (map[string][]byte, error) {
 // If hint is not found error returned is TypeNotProvided.
 // When expression is not a match nil map is returned.
 func (grok *Grok) ParseTyped(text []byte) (map[string]interface{}, error) {
-	captures, err := grok.captureTyped(text)
-	if err != nil {
-		return nil, err
-	}
-
-	captureBytes := make(map[string]interface{})
-	for k, v := range captures {
-		captureBytes[k] = v
-	}
-
-	return captureBytes, nil
+	return grok.captureTyped(text)
 }
 
 // ParseTypedString parses text and returns map[string]interface{} with values
@@ -296,12 +290,12 @@ func (grok *Grok) ParseTyped(text []byte) (map[string]interface{}, error) {
 // If hint is not found error returned is TypeNotProvided.
 // When expression is not a match nil map is returned.
 func (grok *Grok) ParseTypedString(text string) (map[string]interface{}, error) {
-	return grok.ParseTyped([]byte(text))
+	return grok.captureTypedString(text)
 }
 
 func (grok *Grok) compile(pattern string, namedCapturesOnly bool) error {
 	// get expanded pattern
-	expandedExpression, hints, err := grok.expand(pattern, namedCapturesOnly)
+	expandedExpression, hints, captureAliases, err := grok.expand(pattern, namedCapturesOnly)
 	if err != nil {
 		return err
 	}
@@ -312,32 +306,140 @@ func (grok *Grok) compile(pattern string, namedCapturesOnly bool) error {
 	}
 
 	grok.re = compiledExpression
-	grok.typeHints = hints
+	grok.captureFields, grok.hasCaptureGroups = captureFields(compiledExpression.SubexpNames(), hints, captureAliases)
 
 	return nil
 }
 
 func (grok *Grok) captureString(text string) (map[string]string, error) {
-	return captureTypeFn(grok.re, text,
-		func(v, _ string) (string, error) {
-			return v, nil
-		},
-	)
+	fields := grok.captureFields
+	captures := make(map[string]string, len(fields))
+
+	matchField, matched := captureMatcher(grok.re, text)
+	if !matched || len(fields) == 0 {
+		return captures, nil
+	}
+
+	for _, field := range fields {
+		match, ok := matchField(field)
+		if !ok {
+			continue
+		}
+
+		if field.flatToRoot {
+			var merged bool
+			captures, merged = mergeCaptureMaps(match, captures)
+			if !merged {
+				return nil, fmt.Errorf("failed to merge capture maps: %w", ErrParseFailure)
+			}
+			continue
+		}
+
+		captures[field.key] = match
+	}
+
+	return captures, nil
 }
 
 func (grok *Grok) captureBytes(text []byte) (map[string][]byte, error) {
-	return captureTypeFn(grok.re, string(text),
-		func(v, _ string) ([]byte, error) {
-			return []byte(v), nil
-		},
-	)
+	fields := grok.captureFields
+	captures := make(map[string][]byte, len(fields))
+
+	textString := string(text)
+	matchField, matched := captureMatcher(grok.re, textString)
+	if !matched || len(fields) == 0 {
+		return captures, nil
+	}
+
+	for _, field := range fields {
+		match, ok := matchField(field)
+		if !ok {
+			continue
+		}
+
+		matchBytes := []byte(match)
+		if field.flatToRoot {
+			var merged bool
+			captures, merged = mergeCaptureMaps(matchBytes, captures)
+			if !merged {
+				return nil, fmt.Errorf("failed to merge capture maps: %w", ErrParseFailure)
+			}
+			continue
+		}
+
+		captures[field.key] = matchBytes
+	}
+
+	return captures, nil
 }
 
 func (grok *Grok) captureTyped(text []byte) (map[string]interface{}, error) {
-	return captureTypeFn(grok.re, string(text), grok.convertMatchAll)
+	return grok.captureTypedString(string(text))
+}
+
+func (grok *Grok) captureTypedString(text string) (map[string]interface{}, error) {
+	fields := grok.captureFields
+	captures := make(map[string]interface{}, len(fields))
+
+	matchField, matched := captureMatcher(grok.re, text)
+	if !matched || len(fields) == 0 {
+		return captures, nil
+	}
+
+	for _, field := range fields {
+		match, ok := matchField(field)
+		if !ok {
+			continue
+		}
+
+		v := grok.convertMatchConverters(match, field.converters)
+		if safeIsNil(v) {
+			continue
+		}
+		if field.flatToRoot {
+			var merged bool
+			captures, merged = mergeCaptureMaps(v, captures)
+			if !merged {
+				return nil, fmt.Errorf("failed to merge capture maps: %w", ErrParseFailure)
+			}
+		} else {
+			captures[field.key] = v
+		}
+	}
+
+	return captures, nil
 }
 
 func mergeCaptureMaps[T any, K comparable, V any](source T, target map[K]V) (map[K]V, bool) {
+	switch sourceMap := any(source).(type) {
+	case map[string]interface{}:
+		for key, value := range sourceMap {
+			targetKey, ok := any(key).(K)
+			if !ok {
+				continue
+			}
+			targetValue, ok := value.(V)
+			if !ok {
+				continue
+			}
+			target[targetKey] = targetValue
+		}
+		return target, true
+	case map[string]string:
+		for key, value := range sourceMap {
+			targetKey, ok := any(key).(K)
+			if !ok {
+				continue
+			}
+			targetValue, ok := any(value).(V)
+			if !ok {
+				continue
+			}
+			target[targetKey] = targetValue
+		}
+		return target, true
+	}
+
 	// Use reflection to check if source is a map
 	sourceValue := reflect.ValueOf(source)
 	if sourceValue.Kind() != reflect.Map {
@@ -369,8 +471,19 @@ func mergeCaptureMaps[T any, K comparable, V any](source T, target map[K]V) (map
 }
 
 func safeIsNil(i interface{}) bool {
-	if i == nil {
+	switch v := i.(type) {
+	case nil:
 		return true
+	case string, bool, int, int64, float64:
+		return false
+	case []byte:
+		return v == nil
+	case []string:
+		return v == nil
+	case map[string]interface{}:
+		return v == nil
+	case map[string]string:
+		return v == nil
 	}
 
 	v := reflect.ValueOf(i)
@@ -390,62 +503,290 @@ func safeIsNil(i interface{}) bool {
 	}
 }
 
-func captureTypeFn[K any](re regexp.Matcher, text string, conversionFn func(v, key string) (K, error)) (map[string]K, error) {
-	captures := make(map[string]K)
-
-	matches := re.FindStringSubmatch(text)
-	if len(matches) == 0 {
-		return captures, nil
-	}
-
-	names := re.SubexpNames()
-	if len(names) == 0 {
-		return captures, nil
-	}
-
+func captureFields(names []string, hints map[string][]string, aliases map[string]string) ([]captureField, bool) {
+	fields := make([]captureField, 0, len(names))
 	for i, name := range names {
 		if len(name) == 0 {
 			continue
 		}
-
-		match := matches[i]
-		if len(match) == 0 {
-			continue
+		key := name
+		if canonical, ok := aliases[name]; ok {
+			key = canonical
 		}
-
-		if conversionFn != nil {
-			v, err := conversionFn(string(match), name)
-			if err != nil {
-				return nil, err
-			}
-			if safeIsNil(v) {
-				continue
-			}
-			if name == FlatToRoot {
-				var merged bool
-				captures, merged = mergeCaptureMaps(v, captures)
-				if !merged {
-					return nil, fmt.Errorf("failed to merge capture maps: %w", ErrParseFailure)
-				}
-			} else {
-				captures[strings.ReplaceAll(name, dotSep, ".")] = v
-			}
-		}
+		fields = append(fields, captureField{
+			index:      i,
+			key:        strings.ReplaceAll(key, dotSep, "."),
+			flatToRoot: key == FlatToRoot,
+			converters: compileMatchConverters(hints[name]),
+		})
 	}
-
-	return captures, nil
+	return fields, len(fields) > 0
 }
 
-func (grok *Grok) convertMatchAll(match, name string) (interface{}, error) {
-	hint, found := grok.typeHints[name]
-	if !found || len(hint) == 0 {
-		return match, nil
+func captureFieldMatch(text string, matches []int, field captureField) (string, bool) {
+	index := field.index * 2
+	if index+1 >= len(matches) {
+		return "", false
+	}
+	start := matches[index]
+	end := matches[index+1]
+	if start < 0 || end <= start {
+		return "", false
+	}
+	return text[start:end], true
+}
+
+func captureFieldSubmatch(matches []string, field captureField) (string, bool) {
+	if field.index >= len(matches) {
+		return "", false
+	}
+	match := matches[field.index]
+	if match == "" {
+		return "", false
+	}
+	return match, true
+}
+
+func captureMatcher(matcher regexp.Matcher, text string) (func(captureField) (string, bool), bool) {
+	if indexMatcher, ok := matcher.(submatchIndexMatcher); ok {
+		matches := indexMatcher.FindStringSubmatchIndex(text)
+		if len(matches) == 0 {
+			return nil, false
+		}
+		return func(field captureField) (string, bool) {
+			return captureFieldMatch(text, matches, field)
+		}, true
+	}
+
+	matches := matcher.FindStringSubmatch(text)
+	if len(matches) == 0 {
+		return nil, false
+	}
+	return func(field captureField) (string, bool) {
+		return captureFieldSubmatch(matches, field)
+	}, true
+}
+
+func (grok *Grok) convertMatchConverters(match string, converters []matchConverter) interface{} {
+	if len(converters) == 0 {
+		return match
 	}
 	var matchAfterConvert interface{} = match
-	for _, h := range hint {
-		matchAfterConvert = grok.convertMatch(matchAfterConvert, h, name)
+	for _, convert := range converters {
+		matchAfterConvert = convert(grok, matchAfterConvert)
 	}
-	return matchAfterConvert, nil
+	return matchAfterConvert
+}
+
+func compileMatchConverters(hints []string) []matchConverter {
+	if len(hints) == 0 {
+		return nil
+	}
+	converters := make([]matchConverter, 0, len(hints))
+	for _, hint := range hints {
+		converters = append(converters, compileMatchConverter(hint))
+	}
+	return converters
+}
+
+func compileMatchConverter(hint string) matchConverter {
+	switch hint {
+	case "string":
+		return func(_ *Grok, match interface{}) interface{} {
+			return matchString(match)
+		}
+	case "double", "float", "number":
+		return func(_ *Grok, match interface{}) interface{} {
+			result, err := strconv.ParseFloat(matchString(match), 64)
+			if err != nil {
+				return nil
+			}
+			return result
+		}
+	case "int", "long", "integer":
+		return func(_ *Grok, match interface{}) interface{} {
+			result, err := strconv.Atoi(matchString(match))
+			if err != nil {
+				return nil
+			}
+			return result
+		}
+	case "bool", "boolean":
+		return func(_ *Grok, match interface{}) interface{} {
+			result, err := strconv.ParseBool(matchString(match))
+			if err != nil {
+				return nil
+			}
+			return result
+		}
+	case "json":
+		return func(_ *Grok, match interface{}) interface{} {
+			var result map[string]interface{}
+			_ = json.Unmarshal([]byte(matchString(match)), &result)
+			return result
+		}
+	case "querystring":
+		return func(_ *Grok, match interface{}) interface{} {
+			values, err := url.ParseQuery(strings.TrimPrefix(matchString(match), "?"))
+			if err != nil {
+				return nil
+			}
+			result := make(map[string]string)
+			for key, val := range values {
+				if len(val) > 0 {
+					result[key] = val[0]
+				}
+			}
+			return result
+		}
+	case "rubyhash":
+		return func(grok *Grok, match interface{}) interface{} {
+			result, err := grok.rubyHashParser.Parse(matchString(match))
+			if err != nil {
+				return nil
+			}
+			return result
+		}
+	}
+
+	parseResult := parseFunction(hint)
+	if parseResult == nil {
+		return func(_ *Grok, _ interface{}) interface{} {
+			return nil
+		}
+	}
+
+	args := parseResult.Args
+	switch parseResult.Name {
+	case "array":
+		switch len(args) {
+		case 1:
+			separator := unquoteString(args[0])
+			return func(_ *Grok, match interface{}) interface{} {
+				str, ok := match.(string)
+				if !ok {
+					return nil
+				}
+				return strings.Split(str, separator)
+			}
+		case 2:
+			openCloseStr := unquoteString(args[0])
+			openCloseStrParts := strings.Split(openCloseStr, "")
+			if len(openCloseStrParts) < 2 {
+				return func(_ *Grok, _ interface{}) interface{} {
+					return nil
+				}
+			}
+			startTag := openCloseStrParts[0]
+			endTag := openCloseStrParts[1]
+			separator := unquoteString(args[1])
+			return func(_ *Grok, match interface{}) interface{} {
+				str, ok := match.(string)
+				if !ok {
+					return nil
+				}
+				content := extractBetweenTags(str, startTag, endTag)
+				return strings.Split(content, separator)
+			}
+		default:
+			return func(_ *Grok, _ interface{}) interface{} {
+				return nil
+			}
+		}
+	case "nullIf":
+		needle := ""
+		if len(args) > 0 {
+			needle = unquoteString(args[0])
+		}
+		return func(_ *Grok, match interface{}) interface{} {
+			if match == needle {
+				return nil
+			}
+			return match
+		}
+	case "dateformat":
+		if len(args) == 0 {
+			return func(_ *Grok, _ interface{}) interface{} {
+				return nil
+			}
+		}
+		format := unquoteString(args[0])
+		timezone := ""
+		if len(args) == 2 {
+			timezone = unquoteString(args[1])
+		}
+		return func(_ *Grok, match interface{}) interface{} {
+			str, ok := match.(string)
+			if !ok {
+				return nil
+			}
+			t, err := parseDateString(str, format, timezone)
+			if err != nil {
+				return nil
+			}
+			return timeToEpochMillis(t)
+		}
+	case "keyvalue":
+		options := parseKeyValueArgs(args)
+		separator := strings.TrimSpace(options.SeparatorStr)
+		return func(_ *Grok, match interface{}) interface{} {
+			pairs, err := splitStringToPairs(matchString(match), options)
+			if err != nil {
+				return nil
+			}
+			parseKeyValuePairsResult, err := parseKeyValuePairs(pairs, separator)
+			if err != nil {
+				return nil
+			}
+			return parseKeyValuePairsResult
+		}
+	case "scale":
+		if len(args) == 0 {
+			return func(_ *Grok, _ interface{}) interface{} {
+				return nil
+			}
+		}
+		functionArgsNumber, err := parseStringToNumber(args[0])
+		if err != nil {
+			return func(_ *Grok, _ interface{}) interface{} {
+				return nil
+			}
+		}
+		return func(_ *Grok, match interface{}) interface{} {
+			matchNumber, err := parseMatchToNumber(match)
+			if err != nil {
+				return nil
+			}
+			switch functionArgsNumber := functionArgsNumber.(type) {
+			case int64:
+				switch matchNumber := matchNumber.(type) {
+				case int64:
+					return matchNumber * functionArgsNumber
+				case float64:
+					return matchNumber * float64(functionArgsNumber)
+				}
+			case float64:
+				switch matchNumber := matchNumber.(type) {
+				case int64:
+					return float64(matchNumber) * functionArgsNumber
+				case float64:
+					return matchNumber * functionArgsNumber
+				}
+			}
+			return nil
+		}
+	default:
+		return func(_ *Grok, _ interface{}) interface{} {
+			return nil
+		}
+	}
+}
+
+func matchString(match interface{}) string {
+	if str, ok := match.(string); ok {
+		return str
+	}
+	return fmt.Sprint(match)
 }
 
 func parseStringToNumber(s string) (interface{}, error) {
@@ -458,6 +799,23 @@ func parseStringToNumber(s string) (interface{}, error) {
 	}
 
 	return nil, fmt.Errorf("failed to parse %q", s)
+}
+
+func parseMatchToNumber(match interface{}) (interface{}, error) {
+	switch v := match.(type) {
+	case int:
+		return int64(v), nil
+	case int64:
+		return v, nil
+	case float64:
+		return v, nil
+	case float32:
+		return float64(v), nil
+	case string:
+		return parseStringToNumber(v)
+	default:
+		return parseStringToNumber(matchString(match))
+	}
 }
 
 type KeyValueOptions struct {
@@ -724,140 +1082,6 @@ func extractBetweenTags(input, startTag, endTag string) string {
 	return input[startPos:endPos]
 }
 
-func (grok *Grok) convertMatch(match interface{}, hint, name string) interface{} {
-	switch hint {
-	case "string":
-		str := fmt.Sprintf("%v", match)
-		return str
-	case "double", "float", "number":
-		result, err := strconv.ParseFloat(fmt.Sprintf("%v", match), 64)
-		if err != nil {
-			return nil
-		}
-		return result
-	case "int", "long", "integer":
-		result, err := strconv.Atoi(fmt.Sprintf("%v", match))
-		if err != nil {
-			return nil
-		}
-		return result
-	case "bool", "boolean":
-		result, err := strconv.ParseBool(fmt.Sprintf("%v", match))
-		if err != nil {
-			return nil
-		}
-		return result
-	case "json":
-		var result map[string]interface{}
-		_ = json.Unmarshal([]byte(fmt.Sprintf("%v", match)), &result)
-		return result
-	case "querystring":
-		queryStr := strings.TrimPrefix(fmt.Sprintf("%v", match), "?")
-		values, err := url.ParseQuery(queryStr)
-		if err != nil {
-			return nil
-		}
-		result := make(map[string]string)
-		for key, val := range values {
-			if len(val) > 0 {
-				result[key] = val[0]
-			}
-		}
-		return result
-	case "rubyhash":
-		result, err := grok.rubyHashParser.Parse(fmt.Sprintf("%v", match))
-		if err != nil {
-			return nil
-		}
-		return result
-	default:
-		parseResult := parseFunction(hint)
-		if parseResult != nil {
-			functionName := parseResult.Name
-			args := parseResult.Args
-			switch functionName {
-			case "array":
-				if str, ok := match.(string); !ok {
-					return nil
-				} else {
-					if len(args) == 1 {
-						return strings.Split(str, unquoteString(args[0]))
-					}
-					if len(args) == 2 {
-						openCloseStr := unquoteString(args[0])
-						openCloseStrParts := strings.Split(openCloseStr, "")
-						startTag := openCloseStrParts[0]
-						endTag := openCloseStrParts[1]
-						content := extractBetweenTags(str, startTag, endTag)
-						return strings.Split(content, unquoteString(args[1]))
-					}
-					return nil
-				}
-			case "nullIf":
-				if match == unquoteString(args[0]) {
-					return nil
-				}
-				return match
-			case "dateformat":
-				if str, ok := match.(string); !ok {
-					return nil
-				} else {
-					if len(args) == 2 {
-						t, err := parseDateString(str, unquoteString(args[0]), unquoteString(args[1]))
-						if err != nil {
-							return nil
-						}
-						return timeToEpochMillis(t)
-					}
-					t, err := parseDateString(str, unquoteString(args[0]), "")
-					if err != nil {
-						return nil
-					}
-					return timeToEpochMillis(t)
-				}
-			case "keyvalue":
-				options := parseKeyValueArgs(args)
-				pairs, err := splitStringToPairs(fmt.Sprintf("%v", match), options)
-				if err != nil {
-					return nil
-				}
-				parseKeyValuePairsResult, err := parseKeyValuePairs(pairs, strings.TrimSpace(options.SeparatorStr))
-				if err != nil {
-					return nil
-				}
-				return parseKeyValuePairsResult
-			case "scale":
-				functionArgsNumber, err := parseStringToNumber(args[0])
-				if err != nil {
-					return nil
-				}
-				matchNumber, err := parseStringToNumber(fmt.Sprintf("%v", match))
-				if err != nil {
-					return nil
-				}
-				switch functionArgsNumber := functionArgsNumber.(type) {
-				case int64:
-					switch matchNumber := matchNumber.(type) {
-					case int64:
-						return matchNumber * functionArgsNumber
-					case float64:
-						return matchNumber * float64(functionArgsNumber)
-					}
-				case float64:
-					switch matchNumber := matchNumber.(type) {
-					case int64:
-						return float64(matchNumber) * functionArgsNumber
-					case float64:
-						return matchNumber * functionArgsNumber
-					}
-				}
-				return nil
-			}
-		}
-		return nil
-	}
-}
-
 func splitByColonOutsideParentheses(input string) []string {
 	var result []string
 	var currentPart strings.Builder
@@ -907,9 +1131,12 @@ func splitByColonOutsideParentheses(input string) []string {
 	return result
 }
 
-// expand processes a pattern and returns expanded regular expression, type hints and error
-func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[string][]string, error) {
+// expand processes a pattern and returns expanded regular expression, type hints,
+// capture aliases and error.
+func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[string][]string, map[string]string, error) {
 	hints := make(map[string][]string)
+	captureAliases := make(map[string]string)
+	captureCounts := make(map[string]int)
 	expandedPattern := pattern
 
 	// recursion break is guarding against cyclic reference in pattern definitions
@@ -942,7 +1169,7 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 					if len(nameParts) == 3 && (strings.HasPrefix(nameParts[2], "json") || strings.HasPrefix(nameParts[2], "keyvalue") || strings.HasPrefix(nameParts[2], "rubyhash")) {
 						targetId = FlatToRoot
 					} else {
-						return "", nil, fmt.Errorf("target id is empty: %w", ErrParseFailure)
+						return "", nil, nil, fmt.Errorf("target id is empty: %w", ErrParseFailure)
 					}
 				} else {
 					targetId = strings.ReplaceAll(nameParts[1], ".", dotSep)
@@ -950,17 +1177,18 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 			} else {
 				targetId = grokId
 			}
+			var captureHints []string
 			if len(nameParts) > 1 {
 				switch {
 				case grokId == "NUMBER" && nameParts[0] != "numberStr":
-					hints[targetId] = append(hints[targetId], "double")
+					captureHints = append(captureHints, "double")
 				case (grokId == "INT" || grokId == "INTEGER") && nameParts[0] != "integerStr":
-					hints[targetId] = append(hints[targetId], "int")
+					captureHints = append(captureHints, "int")
 				}
 			}
 			// compile hints for used patterns
 			if len(nameParts) == 3 {
-				hints[targetId] = append(hints[targetId], nameParts[2])
+				captureHints = append(captureHints, nameParts[2])
 			}
 
 			// if the last match is the data pattern, use the greedy data pattern
@@ -970,11 +1198,7 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 
 			knownPattern, found, lookupHint := grok.lookupPattern(grokId)
 			if !found {
-				return "", nil, fmt.Errorf("pattern definition %q unknown: %w", grokId, ErrParseFailure)
-			}
-
-			if lookupHint != "" {
-				hints[targetId] = append(hints[targetId], lookupHint)
+				return "", nil, nil, fmt.Errorf("pattern definition %q unknown: %w", grokId, ErrParseFailure)
 			}
 
 			var replacementPattern string
@@ -983,15 +1207,29 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 				replacementPattern = "(" + knownPattern + ")"
 
 			} else {
-				replacementPattern = "(?P<" + targetId + ">" + knownPattern + ")"
+				captureId := targetId
+				if count := captureCounts[targetId]; count > 0 {
+					captureId = fmt.Sprintf("%s___dup%d", targetId, count)
+					captureAliases[captureId] = targetId
+				}
+				captureCounts[targetId]++
+
+				if lookupHint != "" {
+					captureHints = append(captureHints, lookupHint)
+				}
+				if len(captureHints) > 0 {
+					hints[captureId] = append(hints[captureId], captureHints...)
+				}
+
+				replacementPattern = "(?P<" + captureId + ">" + knownPattern + ")"
 			}
 
 			// expand pattern with definition
-			expandedPattern = strings.ReplaceAll(expandedPattern, nameSubmatch[0], replacementPattern)
+			expandedPattern = strings.Replace(expandedPattern, nameSubmatch[0], replacementPattern, 1)
 		}
 	}
 
-	return expandedPattern, hints, nil
+	return expandedPattern, hints, captureAliases, nil
 }
 
 func createRegexPatternFromFormat(format string) (string, string) {
