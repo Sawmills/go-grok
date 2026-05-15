@@ -29,7 +29,7 @@ var Default = map[string]string{
 	"INT":     intPattern,
 	"INTEGER": intPattern,
 	"NUMBER":  `(?:%{BASE10NUM})`,
-	"BOOL":    "true|false",
+	"BOOL":    `(?i:true|false)`,
 
 	"BASE10NUM":    `([+-]?(?:[0-9]+(?:\.[0-9]+)?)|\.[0-9]+)`,
 	"BASE16NUM":    `[+-]?(?:0x)?[0-9A-Fa-f]+`,                    // Adjusted, removed lookbehind

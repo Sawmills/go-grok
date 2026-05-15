@@ -141,7 +141,7 @@ Default set consists of:
 | SPACE | " ", "\t", "  " |
 | INT | "123", "-456", "+789" |
 | NUMBER | "123", "456.789", "-0.123" |
-| BOOL |"true", "false", "true" |
+| BOOL |"true", "false", "True", "False" |
 | BASE10NUM | "123", "-123.456", "0.789" |
 | BASE16NUM | "1a2b", "0x1A2B", "-0x1a2b3c" |
 | BASE16FLOAT |  "0x1.a2b3", "-0x1A2B3C.D" |
