@@ -377,6 +377,65 @@ func TestDatadogANSIUSDatePatternParsesLeadingZeroHour(t *testing.T) {
 	require.Equal(t, "RHkwy2F3MFe3TOm", got["tenant_id"])
 }
 
+func TestBooleanDefaultPatternInfersTypedBool(t *testing.T) {
+	testCases := []struct {
+		name    string
+		pattern string
+		text    string
+		want    map[string]interface{}
+	}{
+		{
+			name:    "datadog boolean alias lowercase",
+			pattern: `^slow=%{boolean:slow} high_memory_growth=%{boolean:high_memory_growth}$`,
+			text:    "slow=false high_memory_growth=true",
+			want: map[string]interface{}{
+				"slow":               false,
+				"high_memory_growth": true,
+			},
+		},
+		{
+			name:    "datadog boolean alias titlecase",
+			pattern: `^slow=%{boolean:slow} high_memory_growth=%{boolean:high_memory_growth}$`,
+			text:    "slow=False high_memory_growth=True",
+			want: map[string]interface{}{
+				"slow":               false,
+				"high_memory_growth": true,
+			},
+		},
+		{
+			name:    "standard BOOL pattern",
+			pattern: `^slow=%{BOOL:slow} high_memory_growth=%{BOOL:high_memory_growth}$`,
+			text:    "slow=false high_memory_growth=True",
+			want: map[string]interface{}{
+				"slow":               false,
+				"high_memory_growth": true,
+			},
+		},
+		{
+			name:    "mixed case BOOL pattern",
+			pattern: `^slow=%{BOOL:slow} high_memory_growth=%{BOOL:high_memory_growth}$`,
+			text:    "slow=fAlSe high_memory_growth=tRuE",
+			want: map[string]interface{}{
+				"slow":               false,
+				"high_memory_growth": true,
+			},
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			g, err := grok.NewComplete()
+			require.NoError(t, err)
+
+			require.NoError(t, g.Compile(tt.pattern, true))
+
+			got, err := g.ParseTypedString(tt.text)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestDefaultPatterns(t *testing.T) {
 	testCases := map[string][]string{
 		"WORD":     {"hello", "world123", "test_data"},
@@ -386,7 +445,7 @@ func TestDefaultPatterns(t *testing.T) {
 		// types
 		"INT":          {"123", "-456", "+789"},
 		"NUMBER":       {"123", "456.789", "-0.123"},
-		"BOOL":         {"true", "false", "true"},
+		"BOOL":         {"true", "false", "True", "False"},
 		"BASE10NUM":    {"123", "-123.456", "0.789"},
 		"BASE16NUM":    {"1a2b", "0x1A2B", "-0x1a2b3c"},
 		"BASE16FLOAT":  {"0x1.a2b3", "-0x1A2B3C.D", "0x123.abc"},
@@ -1245,6 +1304,15 @@ func TestConvertMatch(t *testing.T) {
 			`8080`,
 			map[string]interface{}{
 				"network.client.port": "8080",
+			},
+			true,
+		},
+		{
+			"Pattern with booleanStr",
+			`%{booleanStr:slow}`,
+			`True`,
+			map[string]interface{}{
+				"slow": "True",
 			},
 			true,
 		},

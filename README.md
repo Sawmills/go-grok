@@ -141,7 +141,7 @@ Default set consists of:
 | SPACE | " ", "\t", "  " |
 | INT | "123", "-456", "+789" |
 | NUMBER | "123", "456.789", "-0.123" |
-| BOOL |"true", "false", "true" |
+| BOOL |"true", "false", "True", "False" |
 | BASE10NUM | "123", "-123.456", "0.789" |
 | BASE16NUM | "1a2b", "0x1A2B", "-0x1a2b3c" |
 | BASE16FLOAT |  "0x1.a2b3", "-0x1A2B3C.D" |
@@ -220,4 +220,4 @@ Default set consists of:
 | SYSLOGPROG |"sshd[1234]", "kernel", "cron[5678]" |
 | SYSLOGHOST |"example.com", "192.168.1.1", "localhost" |
 | SYSLOGFACILITY |  "<1.2>", "<12345.13456>" |
-| HTTPDATE |  "25/Dec/2024:14:33 4" |
+| HTTPDATE |  "25/Dec/2024:14:33:45 +0400" |
