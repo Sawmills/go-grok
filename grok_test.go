@@ -411,6 +411,15 @@ func TestBooleanDefaultPatternInfersTypedBool(t *testing.T) {
 				"high_memory_growth": true,
 			},
 		},
+		{
+			name:    "mixed case BOOL pattern",
+			pattern: `^slow=%{BOOL:slow} high_memory_growth=%{BOOL:high_memory_growth}$`,
+			text:    "slow=fAlSe high_memory_growth=tRuE",
+			want: map[string]interface{}{
+				"slow":               false,
+				"high_memory_growth": true,
+			},
+		},
 	}
 
 	for _, tt := range testCases {

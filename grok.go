@@ -614,7 +614,7 @@ func compileMatchConverter(hint string) matchConverter {
 		}
 	case "bool", "boolean":
 		return func(_ *Grok, match interface{}) interface{} {
-			result, err := strconv.ParseBool(matchString(match))
+			result, err := strconv.ParseBool(strings.ToLower(matchString(match)))
 			if err != nil {
 				return nil
 			}
