@@ -220,4 +220,4 @@ Default set consists of:
 | SYSLOGPROG |"sshd[1234]", "kernel", "cron[5678]" |
 | SYSLOGHOST |"example.com", "192.168.1.1", "localhost" |
 | SYSLOGFACILITY |  "<1.2>", "<12345.13456>" |
-| HTTPDATE |  "25/Dec/2024:14:33 4" |
+| HTTPDATE |  "25/Dec/2024:14:33:45 +0400" |
