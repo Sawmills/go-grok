@@ -379,21 +379,33 @@ func TestDatadogANSIUSDatePatternParsesLeadingZeroHour(t *testing.T) {
 
 func TestBooleanDefaultPatternInfersTypedBool(t *testing.T) {
 	testCases := []struct {
-		name string
-		text string
-		want map[string]interface{}
+		name    string
+		pattern string
+		text    string
+		want    map[string]interface{}
 	}{
 		{
-			name: "lowercase",
-			text: "slow=false high_memory_growth=true",
+			name:    "datadog boolean alias lowercase",
+			pattern: `^slow=%{boolean:slow} high_memory_growth=%{boolean:high_memory_growth}$`,
+			text:    "slow=false high_memory_growth=true",
 			want: map[string]interface{}{
 				"slow":               false,
 				"high_memory_growth": true,
 			},
 		},
 		{
-			name: "titlecase",
-			text: "slow=False high_memory_growth=True",
+			name:    "datadog boolean alias titlecase",
+			pattern: `^slow=%{boolean:slow} high_memory_growth=%{boolean:high_memory_growth}$`,
+			text:    "slow=False high_memory_growth=True",
+			want: map[string]interface{}{
+				"slow":               false,
+				"high_memory_growth": true,
+			},
+		},
+		{
+			name:    "standard BOOL pattern",
+			pattern: `^slow=%{BOOL:slow} high_memory_growth=%{BOOL:high_memory_growth}$`,
+			text:    "slow=false high_memory_growth=True",
 			want: map[string]interface{}{
 				"slow":               false,
 				"high_memory_growth": true,
@@ -406,7 +418,7 @@ func TestBooleanDefaultPatternInfersTypedBool(t *testing.T) {
 			g, err := grok.NewComplete()
 			require.NoError(t, err)
 
-			require.NoError(t, g.Compile(`^slow=%{boolean:slow} high_memory_growth=%{boolean:high_memory_growth}$`, true))
+			require.NoError(t, g.Compile(tt.pattern, true))
 
 			got, err := g.ParseTypedString(tt.text)
 			require.NoError(t, err)
@@ -1283,6 +1295,15 @@ func TestConvertMatch(t *testing.T) {
 			`8080`,
 			map[string]interface{}{
 				"network.client.port": "8080",
+			},
+			true,
+		},
+		{
+			"Pattern with booleanStr",
+			`%{booleanStr:slow}`,
+			`True`,
+			map[string]interface{}{
+				"slow": "True",
 			},
 			true,
 		},

@@ -79,9 +79,10 @@ var patternDefaultsMappings = map[string]string{
 	"singleQuotedString": "QUOTEDSTRING", // Subset of QUOTEDSTRING
 
 	// Special cases
-	"boolean": "BOOL",
-	"port":    "POSINT",
-	"data":    "DATA",
+	"boolean":    "BOOL",
+	"booleanStr": "BOOL",
+	"port":       "POSINT",
+	"data":       "DATA",
 }
 
 var dateReplacements = []struct {
@@ -1184,7 +1185,7 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 					captureHints = append(captureHints, "double")
 				case (grokId == "INT" || grokId == "INTEGER") && nameParts[0] != "integerStr":
 					captureHints = append(captureHints, "int")
-				case grokId == "BOOL" && nameParts[0] == "boolean":
+				case grokId == "BOOL" && nameParts[0] != "booleanStr":
 					captureHints = append(captureHints, "boolean")
 				}
 			}
