@@ -20,13 +20,14 @@ package grok
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/elastic/go-grok/parsers"
-	"github.com/elastic/go-grok/regexp"
 	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/elastic/go-grok/parsers"
+	"github.com/elastic/go-grok/regexp"
 
 	"github.com/elastic/go-grok/patterns"
 )
@@ -280,6 +281,9 @@ func (grok *Grok) Parse(text []byte) (map[string][]byte, error) {
 
 // ParseTyped parses text and returns map[string]interface{} with values
 // typed according to type hints generated at compile time.
+// Anonymous json, keyvalue(), and rubyhash captures convert independently and
+// merge their fields into the result. Later captures overwrite duplicate fields,
+// including values of a different type. Use named captures to keep maps separate.
 // If hint is not found error returned is TypeNotProvided.
 // When expression is not a match nil map is returned.
 func (grok *Grok) ParseTyped(text []byte) (map[string]interface{}, error) {
@@ -288,6 +292,7 @@ func (grok *Grok) ParseTyped(text []byte) (map[string]interface{}, error) {
 
 // ParseTypedString parses text and returns map[string]interface{} with values
 // typed according to type hints generated at compile time.
+// Anonymous captures follow the conversion and merge rules of ParseTyped.
 // If hint is not found error returned is TypeNotProvided.
 // When expression is not a match nil map is returned.
 func (grok *Grok) ParseTypedString(text string) (map[string]interface{}, error) {
@@ -821,11 +826,11 @@ func parseMatchToNumber(match interface{}) (interface{}, error) {
 
 type KeyValueOptions struct {
 	SeparatorStr string
-	//TODO add support
+	// TODO add support
 	CharacterAllowList string
-	//TODO add support
+	// TODO add support
 	QuotingStr string
-	//TODO add support
+	// TODO add support
 	Delimiter string
 }
 
@@ -1138,6 +1143,7 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 	hints := make(map[string][]string)
 	captureAliases := make(map[string]string)
 	captureCounts := make(map[string]int)
+	var captureSource strings.Builder
 	expandedPattern := pattern
 
 	// recursion break is guarding against cyclic reference in pattern definitions
@@ -1208,14 +1214,28 @@ func (grok *Grok) expand(pattern string, namedCapturesOnly bool) (string, map[st
 			if namedCapturesOnly && len(nameParts) == 1 {
 				// this has no semantic (pattern:foo) so we don't need to capture
 				replacementPattern = "(" + knownPattern + ")"
-
 			} else {
 				captureId := targetId
-				if count := captureCounts[targetId]; count > 0 {
-					captureId = fmt.Sprintf("%s___dup%d", targetId, count)
+				count := captureCounts[targetId]
+				if count > 0 {
+					// Reserve user names before assigning aliases, including names in
+					// nested definitions and raw regex groups. Dots encode as dotSep.
+					if captureSource.Len() == 0 {
+						captureSource.WriteString(strings.ReplaceAll(pattern, ".", dotSep))
+						for _, definition := range grok.patternDefinitions {
+							captureSource.WriteString(strings.ReplaceAll(definition, ".", dotSep))
+						}
+					}
+					for {
+						captureId = fmt.Sprintf("%s___dup%d", targetId, count)
+						if !strings.Contains(captureSource.String(), captureId) {
+							break
+						}
+						count++
+					}
 					captureAliases[captureId] = targetId
 				}
-				captureCounts[targetId]++
+				captureCounts[targetId] = count + 1
 
 				if lookupHint != "" {
 					captureHints = append(captureHints, lookupHint)
